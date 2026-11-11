@@ -1,0 +1,10 @@
+{
+  "name": "Nakit Akışı",
+  "short_name": "Nakit Akışı",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "icons": [{"src": "icon-180.png", "sizes": "180x180", "type": "image/png"}]
+}

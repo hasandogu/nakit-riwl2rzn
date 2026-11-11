@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="tr" class="bg-zinc-950">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Nakit Akışı">
+<meta name="theme-color" content="#09090b">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>Nakit Akışı</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="importmap">
+{"imports": {
+ "react": "https://esm.sh/react@18.3.1",
+ "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+ "react-dom": "https://esm.sh/react-dom@18.3.1?external=react",
+ "react-dom/client": "https://esm.sh/react-dom@18.3.1/client?external=react",
+ "lucide-react": "https://esm.sh/lucide-react@0.383.0?external=react",
+ "recharts": "https://esm.sh/recharts@2.12.7?external=react,react-dom"
+}}
+</script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<style>body{margin:0;background:#09090b}</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-type="module" data-presets="react">
+import { createRoot } from "react-dom/client";
+import React, { useState, useMemo, useEffect, useRef, useContext, createContext } from "react";
+import {
+  Eye, EyeOff, Download, Upload, Plus, Trash2, Search, ChevronLeft, ChevronRight, X,
+  Wallet, TrendingUp, TrendingDown, PiggyBank, CreditCard, Repeat, Layers, Pencil,
+} from "lucide-react";
+import {
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell,
+} from "recharts";
+
+/* ───────────── Sabitler ───────────── */
+const KEY = "nakit-akisi-v1";
+const EXP_CATS = ["Yemek & Market", "Kira / Faturalar", "Ulaşım", "Dijital Abonelikler", "Eğlence", "Eğitim / Donanım", "Diğer"];
+const INC_CATS = ["Maaş / Burs", "Ek Gelir", "Diğer Gelir"];
+const METHODS = ["Nakit", "Kredi Kartı", "Banka Hesabı"];
+const CAT_COLOR = {
+  "Yemek & Market": "#60a5fa", "Kira / Faturalar": "#a78bfa", "Ulaşım": "#22d3ee",
+  "Dijital Abonelikler": "#f472b6", "Eğlence": "#fb923c", "Eğitim / Donanım": "#2dd4bf", "Diğer": "#94a3b8",
+};
+const MODES = { single: "Tek Çekim", installment: "Taksitli", recurring: "Her Ay Tekrarlayan" };
+
+/* ───────────── Yardımcılar ───────────── */
+const PrivCtx = createContext(false);
+const pad = (n) => String(n).padStart(2, "0");
+const fmt = (n) => new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 }).format(n || 0);
+const fmt2 = (n) => new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 }).format(n || 0);
+const idx = (ym) => { const [y, m] = ym.split("-").map(Number); return y * 12 + m - 1; };
+const addM = (ym, n) => { const i = idx(ym) + n; return `${Math.floor(i / 12)}-${pad((i % 12) + 1)}`; };
+const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+const monthLabel = (ym) => new Date(+ym.slice(0, 4), +ym.slice(5) - 1, 1).toLocaleDateString("tr-TR", { month: "long", year: "numeric" });
+const monthShort = (ym) => new Date(+ym.slice(0, 4), +ym.slice(5) - 1, 1).toLocaleDateString("tr-TR", { month: "short" });
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const dayIn = (ym, day) => `${ym}-${pad(Math.min(day, new Date(+ym.slice(0, 4), +ym.slice(5), 0).getDate()))}`;
+
+/** Bir işlemin seçilen aydaki gerçekleşmelerini döndürür (taksit / tekrar motoru). */
+function occurrences(tx, ym) {
+  const diff = idx(ym) - idx(tx.date.slice(0, 7));
+  if (diff < 0) return [];
+  if (tx.mode === "single") return diff === 0 ? [{ tx, amt: tx.amount }] : [];
+  if (tx.mode === "installment") return diff < tx.installments ? [{ tx, amt: tx.amount / tx.installments, k: diff + 1, n: tx.installments }] : [];
+  return [{ tx, amt: tx.amount }]; // recurring
+}
+const monthOcc = (txs, ym) => txs.flatMap((t) => occurrences(t, ym));
+const sumBy = (arr, f) => arr.reduce((s, x) => s + f(x), 0);
+
+/* ───────────── Örnek veri ───────────── */
+function buildSeed() {
+  let s = 20260101;
+  const rnd = () => { s |= 0; s = (s + 0x6d2b79f5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const between = (a, b) => Math.round(a + rnd() * (b - a));
+  const now = todayStr(), cur = now.slice(0, 7), out = [];
+  const add = (o) => { if (o.date <= now || o.mode !== "single") out.push({ id: uid(), mode: "single", installments: 1, ...o }); };
+  add({ type: "income", title: "Maaş / Burs", amount: 45000, category: "Maaş / Burs", method: "Banka Hesabı", date: dayIn(addM(cur, -6), 1), mode: "recurring" });
+  add({ type: "expense", title: "Ev kirası", amount: 14500, category: "Kira / Faturalar", method: "Banka Hesabı", date: dayIn(addM(cur, -6), 3), mode: "recurring" });
+  add({ type: "expense", title: "İnternet", amount: 489.9, category: "Kira / Faturalar", method: "Kredi Kartı", date: dayIn(addM(cur, -6), 12), mode: "recurring" });
+  add({ type: "expense", title: "Elektrik & Su", amount: 850, category: "Kira / Faturalar", method: "Banka Hesabı", date: dayIn(addM(cur, -6), 15), mode: "recurring" });
+  [["Spotify", 99.99, 8], ["Netflix", 229.99, 10], ["Amazon Prime", 59, 21], ["iCloud", 39.99, 5]].forEach(([title, amount, d]) =>
+    add({ type: "expense", title, amount, category: "Dijital Abonelikler", method: "Kredi Kartı", date: dayIn(addM(cur, -6), d), mode: "recurring" }));
+  add({ type: "expense", title: "Dizüstü bilgisayar", amount: 54000, category: "Eğitim / Donanım", method: "Kredi Kartı", date: dayIn(addM(cur, -2), 14), mode: "installment", installments: 12 });
+  add({ type: "expense", title: "Kablosuz kulaklık", amount: 7200, category: "Eğitim / Donanım", method: "Kredi Kartı", date: dayIn(addM(cur, -1), 9), mode: "installment", installments: 6 });
+  [[-4, "Ek ders", 6500], [-2, "Freelance proje", 4000], [-1, "Freelance proje", 8200]].forEach(([m, title, amount]) =>
+    add({ type: "income", title, amount, category: "Ek Gelir", method: "Banka Hesabı", date: dayIn(addM(cur, m), 18) }));
+  for (let m = -6; m <= 0; m++) {
+    const ym = addM(cur, m);
+    [2, 9, 16, 23].forEach((d) => add({ type: "expense", title: ["Migros", "BİM", "A101", "Şok"][between(0, 3)], amount: between(280, 1150), category: "Yemek & Market", method: rnd() > 0.5 ? "Kredi Kartı" : "Banka Hesabı", date: dayIn(ym, d) }));
+    [5, 19].forEach((d) => add({ type: "expense", title: ["Yemeksepeti", "Getir Yemek", "Trendyol Yemek"][between(0, 2)], amount: between(170, 430), category: "Yemek & Market", method: "Kredi Kartı", date: dayIn(ym, d) }));
+    add({ type: "expense", title: "Toplu taşıma dolumu", amount: between(450, 700), category: "Ulaşım", method: "Nakit", date: dayIn(ym, 4) });
+    add({ type: "expense", title: ["Sinema", "Konser bileti", "Arkadaşlarla akşam"][between(0, 2)], amount: between(250, 900), category: "Eğlence", method: "Kredi Kartı", date: dayIn(ym, between(20, 27)) });
+    if (m === -3) add({ type: "expense", title: "Online kurs", amount: 1850, category: "Eğitim / Donanım", method: "Kredi Kartı", date: dayIn(ym, 11) });
+  }
+  return out;
+}
+function loadStore() {
+  try { const r = JSON.parse(localStorage.getItem(KEY)); if (r && Array.isArray(r.txs)) return r; } catch (e) {}
+  return { txs: buildSeed(), budget: 32000, priv: false };
+}
+
+/* ───────────── Küçük bileşenler ───────────── */
+const Money = ({ v, d2, className = "" }) => {
+  const priv = useContext(PrivCtx);
+  return <span className={`tabular-nums transition ${priv ? "blur-sm select-none" : ""} ${className}`}>{d2 ? fmt2(v) : fmt(v)}</span>;
+};
+const Card = ({ className = "", children }) => (
+  <div className={`rounded-2xl border border-white/10 bg-zinc-900/60 backdrop-blur-md p-5 ${className}`}>{children}</div>
+);
+const Label = ({ icon: I, children, tone = "text-zinc-400" }) => (
+  <div className={`flex items-center gap-2 text-xs font-medium uppercase tracking-wider ${tone}`}>{I && <I size={14} />}{children}</div>
+);
+const inputCls = "w-full rounded-xl bg-zinc-900 border border-white/10 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-white/30 placeholder:text-zinc-600";
+const ChartTip = ({ active, payload, label }) => {
+  const priv = useContext(PrivCtx);
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-xl border border-white/10 bg-zinc-950/95 px-3 py-2 text-xs shadow-xl">
+      <div className="mb-1 text-zinc-400">{label}</div>
+      {payload.map((p) => <div key={p.dataKey} style={{ color: p.color || p.fill }} className={priv ? "blur-sm" : ""}>{p.name}: {fmt(p.value)}</div>)}
+    </div>
+  );
+};
+
+/* ───────────── İşlem ekleme penceresi ───────────── */
+function AddModal({ onClose, onSave }) {
+  const [f, setF] = useState({ type: "expense", title: "", amount: "", category: EXP_CATS[0], method: METHODS[1], date: todayStr(), mode: "single", installments: 3 });
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const setType = (t) => setF((p) => ({ ...p, type: t, category: t === "income" ? INC_CATS[0] : EXP_CATS[0], mode: t === "income" && p.mode === "installment" ? "single" : p.mode }));
+  const valid = f.title.trim() && +f.amount > 0 && f.date;
+  useEffect(() => { const h = (e) => e.key === "Escape" && onClose(); window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [onClose]);
+  const submit = (e) => {
+    e.preventDefault(); if (!valid) return;
+    onSave({ id: uid(), type: f.type, title: f.title.trim(), amount: +f.amount, category: f.category, method: f.method, date: f.date, mode: f.mode, installments: f.mode === "installment" ? +f.installments : 1 });
+  };
+  const per = f.mode === "installment" && +f.amount > 0 ? +f.amount / +f.installments : 0;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4" onClick={onClose}>
+      <form onSubmit={submit} onClick={(e) => e.stopPropagation()} className="w-full sm:max-w-md max-h-[92vh] overflow-auto rounded-t-3xl sm:rounded-3xl border border-white/10 bg-zinc-950 p-5 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between"><h2 className="text-lg font-semibold">Yeni İşlem</h2>
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-zinc-400 hover:bg-white/10"><X size={18} /></button></div>
+        <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-zinc-900 p-1">
+          {[["expense", "Gider", "bg-rose-400/20 text-rose-300"], ["income", "Gelir", "bg-emerald-400/20 text-emerald-300"]].map(([t, l, c]) => (
+            <button key={t} type="button" onClick={() => setType(t)} className={`rounded-lg py-2 text-sm font-medium transition ${f.type === t ? c : "text-zinc-500"}`}>{l}</button>))}
+        </div>
+        <div className="space-y-3">
+          <input autoFocus className={inputCls} placeholder="Açıklama (örn. Migros, Kira)" value={f.title} onChange={(e) => set("title", e.target.value)} />
+          <div className="grid grid-cols-2 gap-3">
+            <input className={inputCls} type="number" inputMode="decimal" step="0.01" min="0" placeholder={f.mode === "installment" ? "Toplam tutar ₺" : "Tutar ₺"} value={f.amount} onChange={(e) => set("amount", e.target.value)} />
+            <input className={inputCls} type="date" value={f.date} onChange={(e) => set("date", e.target.value)} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <select className={inputCls} value={f.category} onChange={(e) => set("category", e.target.value)}>{(f.type === "income" ? INC_CATS : EXP_CATS).map((c) => <option key={c}>{c}</option>)}</select>
+            <select className={inputCls} value={f.method} onChange={(e) => set("method", e.target.value)}>{METHODS.map((c) => <option key={c}>{c}</option>)}</select>
+          </div>
+          <div>
+            <div className="mb-1.5 text-xs text-zinc-500">Ödeme şekli</div>
+            <div className={`grid gap-1 rounded-xl bg-zinc-900 p-1 ${f.type === "income" ? "grid-cols-2" : "grid-cols-3"}`}>
+              {Object.entries(MODES).filter(([k]) => f.type === "expense" || k !== "installment").map(([k, l]) => (
+                <button key={k} type="button" onClick={() => set("mode", k)} className={`rounded-lg px-1 py-2 text-xs font-medium transition ${f.mode === k ? (k === "recurring" ? "bg-amber-400/20 text-amber-300" : "bg-white/10 text-white") : "text-zinc-500"}`}>{l}</button>))}
+            </div>
+          </div>
+          {f.mode === "installment" && (
+            <div className="rounded-xl border border-white/10 bg-zinc-900/60 p-3">
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {[2, 3, 6, 9, 12, 18, 24].map((n) => (
+                  <button key={n} type="button" onClick={() => set("installments", n)} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${+f.installments === n ? "bg-white text-zinc-900" : "bg-zinc-800 text-zinc-400"}`}>{n}x</button>))}
+              </div>
+              <div className="text-xs text-zinc-400">{+f.installments} taksit{per > 0 && <> · aylık <span className="font-semibold text-zinc-200">{fmt2(per)}</span></>}</div>
+            </div>)}
+          {f.mode === "recurring" && <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-3 text-xs text-amber-200/80">Bu işlem seçilen tarihten itibaren her ay otomatik olarak yansır.</div>}
+        </div>
+        <button disabled={!valid} className="mt-5 w-full rounded-xl bg-white py-2.5 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-200 disabled:opacity-30">Kaydet</button>
+      </form>
+    </div>
+  );
+}
+
+/* ───────────── Ana uygulama ───────────── */
+function App() {
+  const init = useMemo(loadStore, []);
+  const [txs, setTxs] = useState(init.txs);
+  const [budget, setBudget] = useState(init.budget ?? 32000);
+  const [priv, setPriv] = useState(!!init.priv);
+  const [ym, setYm] = useState(todayStr().slice(0, 7));
+  const [modal, setModal] = useState(false);
+  const [q, setQ] = useState("");
+  const [fCat, setFCat] = useState("Tümü");
+  const [fMethod, setFMethod] = useState("Tümü");
+  const [allMonths, setAllMonths] = useState(false);
+  const [editBudget, setEditBudget] = useState(false);
+  const fileRef = useRef(null);
+
+  useEffect(() => { localStorage.setItem(KEY, JSON.stringify({ txs, budget, priv })); }, [txs, budget, priv]);
+
+  const occ = useMemo(() => monthOcc(txs, ym), [txs, ym]);
+  const inc = sumBy(occ.filter((o) => o.tx.type === "income"), (o) => o.amt);
+  const exp = sumBy(occ.filter((o) => o.tx.type === "expense"), (o) => o.amt);
+  const net = inc - exp;
+  const saveRate = inc > 0 ? (net / inc) * 100 : 0;
+  const remaining = budget - exp;
+  const usedPct = budget > 0 ? Math.min(100, (exp / budget) * 100) : 0;
+
+  const pie = useMemo(() => {
+    const m = {};
+    occ.filter((o) => o.tx.type === "expense").forEach((o) => { m[o.tx.category] = (m[o.tx.category] || 0) + o.amt; });
+    return Object.entries(m).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+  }, [occ]);
+
+  const six = useMemo(() => Array.from({ length: 6 }, (_, i) => {
+    const m = addM(ym, i - 5), o = monthOcc(txs, m);
+    return { name: monthShort(m), Gelir: Math.round(sumBy(o.filter((x) => x.tx.type === "income"), (x) => x.amt)), Gider: Math.round(sumBy(o.filter((x) => x.tx.type === "expense"), (x) => x.amt)) };
+  }), [txs, ym]);
+
+  const instAll = txs.filter((t) => t.type === "expense" && t.mode === "installment");
+  const future = useMemo(() => Array.from({ length: 6 }, (_, i) => {
+    const m = addM(ym, i + 1);
+    return { name: monthShort(m), "Taksit": Math.round(sumBy(monthOcc(instAll, m), (x) => x.amt)) };
+  }), [txs, ym]);
+  const activeInst = instAll.map((t) => {
+    const per = t.amount / t.installments, paid = Math.min(t.installments, Math.max(0, idx(ym) - idx(t.date.slice(0, 7)) + 1));
+    return { t, per, left: t.installments - paid, remain: per * (t.installments - paid) };
+  }).filter((x) => x.left > 0);
+  const totalDebt = sumBy(activeInst, (x) => x.remain);
+
+  const fixed = occ.filter((o) => o.tx.type === "expense" && o.tx.mode === "recurring");
+  const fixedTotal = sumBy(fixed, (o) => o.amt);
+
+  const rows = useMemo(() => {
+    const base = allMonths ? txs.map((tx) => ({ tx, amt: tx.mode === "installment" ? tx.amount : tx.amount, all: true, date: tx.date })) : occ.map((o) => ({ ...o, date: dayIn(ym, +o.tx.date.slice(8)) }));
+    const s = q.trim().toLocaleLowerCase("tr");
+    return base.filter((r) => (fCat === "Tümü" || r.tx.category === fCat) && (fMethod === "Tümü" || r.tx.method === fMethod) && (!s || r.tx.title.toLocaleLowerCase("tr").includes(s) || r.tx.category.toLocaleLowerCase("tr").includes(s)))
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [txs, occ, ym, q, fCat, fMethod, allMonths]);
+
+  const del = (tx) => {
+    const seri = tx.mode !== "single";
+    if (window.confirm(seri ? `"${tx.title}" serisinin TÜM aylardaki kayıtları silinecek. Emin misiniz?` : `"${tx.title}" silinsin mi?`)) setTxs((p) => p.filter((x) => x.id !== tx.id));
+  };
+  const exportJson = () => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([JSON.stringify({ txs, budget }, null, 2)], { type: "application/json" }));
+    a.download = `nakit-akisi-yedek-${todayStr()}.json`; a.click();
+  };
+  const importJson = (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const d = JSON.parse(r.result);
+        if (!Array.isArray(d.txs) || !d.txs.every((t) => t.id && t.date && t.amount >= 0 && t.mode)) throw new Error();
+        if (window.confirm("Mevcut veriler silinip yedekteki veriler yüklenecek. Emin misiniz?")) { setTxs(d.txs); if (d.budget) setBudget(+d.budget); }
+      } catch { window.alert("Geçersiz yedek dosyası."); }
+    };
+    r.readAsText(file); e.target.value = "";
+  };
+  const clearAll = () => { if (window.confirm("TÜM veriler (örnek veriler dahil) silinecek. Önce yedek almanızı öneririz. Devam edilsin mi?")) setTxs([]); };
+
+  const grouped = [];
+  rows.forEach((r) => { const k = r.date; if (grouped[grouped.length - 1]?.k !== k) grouped.push({ k, items: [] }); grouped[grouped.length - 1].items.push(r); });
+  const dayFmt = (d) => new Date(d + "T00:00:00").toLocaleDateString("tr-TR", { day: "numeric", month: "long", weekday: "short" });
+  const blur = priv ? "blur-sm select-none" : "";
+
+  return (
+    <PrivCtx.Provider value={priv}>
+      <div className="min-h-screen bg-zinc-950 text-zinc-100 antialiased" style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, system-ui, sans-serif" }}>
+        <div className="pointer-events-none fixed inset-x-0 top-0 h-72 bg-gradient-to-b from-emerald-500/10 via-transparent to-transparent" />
+        {/* Üst bar */}
+        <header className="sticky top-0 z-30 border-b border-white/10 bg-zinc-950/70 backdrop-blur-xl" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2 px-4 py-3">
+            <div className="mr-auto flex items-center gap-2"><div className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-400/15 text-emerald-300"><Wallet size={17} /></div>
+              <span className="text-[15px] font-semibold tracking-tight">Nakit Akışı</span></div>
+            <div className="flex items-center rounded-xl border border-white/10 bg-zinc-900/60">
+              <button onClick={() => setYm(addM(ym, -1))} className="p-2 text-zinc-400 hover:text-white" aria-label="Önceki ay"><ChevronLeft size={16} /></button>
+              <button onClick={() => setYm(todayStr().slice(0, 7))} className="min-w-[116px] px-1 text-center text-sm font-medium capitalize">{monthLabel(ym)}</button>
+              <button onClick={() => setYm(addM(ym, 1))} className="p-2 text-zinc-400 hover:text-white" aria-label="Sonraki ay"><ChevronRight size={16} /></button>
+            </div>
+            <button onClick={() => setPriv(!priv)} title="Gizlilik Modu" className={`rounded-xl border p-2 transition ${priv ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : "border-white/10 bg-zinc-900/60 text-zinc-400 hover:text-white"}`}>{priv ? <EyeOff size={17} /> : <Eye size={17} />}</button>
+            <button onClick={exportJson} title="JSON İndir (Yedekle)" className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-zinc-900/60 px-2.5 py-2 text-xs text-zinc-300 hover:text-white"><Download size={15} /><span className="hidden sm:inline">JSON İndir</span></button>
+            <button onClick={() => fileRef.current?.click()} title="JSON Yükle" className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-zinc-900/60 px-2.5 py-2 text-xs text-zinc-300 hover:text-white"><Upload size={15} /><span className="hidden sm:inline">JSON Yükle</span></button>
+            <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" onChange={importJson} />
+            <button onClick={() => setModal(true)} className="flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-sm font-semibold text-zinc-900 hover:bg-zinc-200"><Plus size={16} />İşlem</button>
+          </div>
+        </header>
+
+        <main className="relative mx-auto max-w-6xl space-y-4 px-4 pb-24 pt-5">
+          {/* Bento grid */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-6">
+            <Card className="lg:col-span-3">
+              <Label icon={net >= 0 ? TrendingUp : TrendingDown}>Bu Ayki Net Nakit Akışı</Label>
+              <div className={`mt-2 text-4xl font-semibold tracking-tight ${net >= 0 ? "text-emerald-400" : "text-rose-400"}`}><Money v={net} /></div>
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <div className="rounded-xl bg-white/[0.03] p-3"><div className="text-xs text-zinc-500">Gelir</div><div className="mt-1 text-lg font-medium text-emerald-400">+<Money v={inc} /></div></div>
+                <div className="rounded-xl bg-white/[0.03] p-3"><div className="text-xs text-zinc-500">Gider</div><div className="mt-1 text-lg font-medium text-rose-400">−<Money v={exp} /></div></div>
+              </div>
+            </Card>
+            <Card className="lg:col-span-3">
+              <div className="flex items-start justify-between">
+                <Label icon={PiggyBank}>Kalan Bütçe · Tasarruf</Label>
+                <button onClick={() => setEditBudget(!editBudget)} className="rounded-lg p-1 text-zinc-500 hover:bg-white/10 hover:text-white" title="Aylık bütçeyi düzenle"><Pencil size={14} /></button>
+              </div>
+              <div className="mt-2 flex items-end justify-between gap-3">
+                <div className={`text-4xl font-semibold tracking-tight ${remaining >= 0 ? "text-zinc-100" : "text-rose-400"}`}><Money v={remaining} /></div>
+                <div className="pb-1 text-right"><div className="text-xs text-zinc-500">Tasarruf oranı</div>
+                  <div className={`text-xl font-semibold ${saveRate >= 0 ? "text-emerald-400" : "text-rose-400"} ${blur}`}>%{saveRate.toFixed(0)}</div></div>
+              </div>
+              <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10"><div className={`h-full rounded-full transition-all ${usedPct >= 100 ? "bg-rose-400" : usedPct >= 80 ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${usedPct}%` }} /></div>
+              <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                <span>Harcanan <Money v={exp} /></span>
+                {editBudget ? <input autoFocus type="number" className="w-28 rounded-lg bg-zinc-800 px-2 py-1 text-right text-xs text-white outline-none" defaultValue={budget} onBlur={(e) => { setBudget(Math.max(0, +e.target.value || 0)); setEditBudget(false); }} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
+                  : <span>Aylık bütçe <Money v={budget} /></span>}
+              </div>
+            </Card>
+
+            <Card className="lg:col-span-3">
+              <Label>Kategori Bazlı Harcama</Label>
+              {pie.length === 0 ? <div className="py-12 text-center text-sm text-zinc-500">Bu ay gider yok.</div> : (
+                <div className="mt-3 flex flex-col items-center gap-4 sm:flex-row">
+                  <div className={`h-44 w-44 shrink-0 ${blur}`}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart><Pie isAnimationActive={false} data={pie} dataKey="value" innerRadius={52} outerRadius={80} paddingAngle={3} stroke="none">{pie.map((p) => <Cell key={p.name} fill={CAT_COLOR[p.name] || "#94a3b8"} />)}</Pie><Tooltip content={<ChartTip />} /></PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <ul className="w-full space-y-2 text-sm">
+                    {pie.map((p) => (
+                      <li key={p.name} className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-zinc-300"><span className="h-2.5 w-2.5 rounded-full" style={{ background: CAT_COLOR[p.name] }} />{p.name}</span>
+                        <span className="text-zinc-400"><Money v={p.value} /> <span className="text-zinc-600">· %{Math.round((p.value / exp) * 100)}</span></span></li>))}
+                  </ul>
+                </div>)}
+            </Card>
+            <Card className="lg:col-span-3">
+              <Label>Son 6 Ay · Gelir vs Gider</Label>
+              <div className={`mt-3 h-48 ${blur}`}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={six} barGap={4}><CartesianGrid vertical={false} stroke="rgba(255,255,255,0.06)" />
+                    <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#71717a", fontSize: 12 }} />
+                    <YAxis tickLine={false} axisLine={false} width={40} tick={{ fill: "#71717a", fontSize: 11 }} tickFormatter={(v) => (v >= 1000 ? `${Math.round(v / 1000)}k` : v)} />
+                    <Tooltip content={<ChartTip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
+                    <Bar isAnimationActive={false} dataKey="Gelir" fill="#34d399" radius={[6, 6, 0, 0]} /><Bar isAnimationActive={false} dataKey="Gider" fill="#fb7185" radius={[6, 6, 0, 0]} /></BarChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
+
+            <Card className="lg:col-span-3">
+              <Label icon={Layers}>Gelecek Ayların Taksit Yükü</Label>
+              <div className="mt-2 flex items-end justify-between"><div><div className="text-xs text-zinc-500">Devreden toplam taksit borcu</div>
+                <div className="text-3xl font-semibold tracking-tight text-violet-300"><Money v={totalDebt} /></div></div>
+                <div className="text-right text-xs text-zinc-500">{activeInst.length} aktif taksit</div></div>
+              <div className={`mt-3 h-28 ${blur}`}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={future}><XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#71717a", fontSize: 11 }} />
+                    <Tooltip content={<ChartTip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} /><Bar isAnimationActive={false} dataKey="Taksit" fill="#a78bfa" radius={[6, 6, 0, 0]} /></BarChart>
+                </ResponsiveContainer>
+              </div>
+              <ul className="mt-2 space-y-1.5 text-sm">
+                {activeInst.length === 0 && <li className="text-zinc-500">Aktif taksit yok.</li>}
+                {activeInst.map((x) => (
+                  <li key={x.t.id} className="flex items-center justify-between"><span className="text-zinc-300">{x.t.title} <span className="text-xs text-zinc-600">· {x.left} taksit kaldı</span></span>
+                    <span className="text-zinc-400"><Money v={x.per} d2 />/ay</span></li>))}
+              </ul>
+            </Card>
+            <Card className="lg:col-span-3">
+              <Label icon={Repeat} tone="text-amber-400/80">Sabit Ödemeler</Label>
+              <div className="mt-2 text-3xl font-semibold tracking-tight text-amber-400"><Money v={fixedTotal} /></div>
+              <div className="text-xs text-zinc-500">{inc > 0 ? <>Gelirin <span className={blur}>%{Math.round((fixedTotal / inc) * 100)}</span>'i her ay sabit olarak çıkıyor</> : "Her ay otomatik tekrarlayan giderler"}</div>
+              <ul className="mt-3 space-y-1.5 text-sm">
+                {fixed.length === 0 && <li className="text-zinc-500">Bu ay sabit ödeme yok.</li>}
+                {fixed.sort((a, b) => b.amt - a.amt).map((o) => (
+                  <li key={o.tx.id} className="flex items-center justify-between"><span className="text-zinc-300">{o.tx.title}</span><span className="text-amber-300/90"><Money v={o.amt} d2 /></span></li>))}
+              </ul>
+            </Card>
+          </div>
+
+          {/* İşlemler */}
+          <Card className="!p-0 overflow-hidden">
+            <div className="flex flex-col gap-2 border-b border-white/10 p-4 sm:flex-row sm:items-center">
+              <div className="relative flex-1"><Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+                <input className={`${inputCls} pl-9`} placeholder="İşlem ara…" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+              <select className={`${inputCls} sm:w-44`} value={fCat} onChange={(e) => setFCat(e.target.value)}><option>Tümü</option>{[...EXP_CATS, ...INC_CATS].map((c) => <option key={c}>{c}</option>)}</select>
+              <select className={`${inputCls} sm:w-40`} value={fMethod} onChange={(e) => setFMethod(e.target.value)}><option>Tümü</option>{METHODS.map((c) => <option key={c}>{c}</option>)}</select>
+              <button onClick={() => setAllMonths(!allMonths)} className={`whitespace-nowrap rounded-xl border px-3 py-2 text-sm ${allMonths ? "border-white/30 bg-white/10 text-white" : "border-white/10 text-zinc-400"}`}>{allMonths ? "Tüm aylar" : "Seçili ay"}</button>
+            </div>
+            <div className="max-h-[560px] overflow-auto">
+              {grouped.length === 0 && <div className="py-14 text-center text-sm text-zinc-500">Eşleşen işlem yok.</div>}
+              {grouped.map((g) => (
+                <div key={g.k}>
+                  <div className="sticky top-0 bg-zinc-900/90 px-4 py-1.5 text-xs font-medium text-zinc-500 backdrop-blur">{dayFmt(g.k)}</div>
+                  {g.items.map((r, i) => {
+                    const t = r.tx, isInc = t.type === "income";
+                    return (
+                      <div key={t.id + i} className="group flex items-center gap-3 border-t border-white/5 px-4 py-3 hover:bg-white/[0.03]">
+                        <span className="h-9 w-9 shrink-0 rounded-xl" style={{ background: isInc ? "rgba(52,211,153,.15)" : (CAT_COLOR[t.category] || "#94a3b8") + "26", display: "grid", placeItems: "center" }}>
+                          {isInc ? <TrendingUp size={16} className="text-emerald-400" /> : t.mode === "installment" ? <Layers size={16} className="text-violet-300" /> : t.mode === "recurring" ? <Repeat size={16} className="text-amber-400" /> : t.method === "Kredi Kartı" ? <CreditCard size={16} style={{ color: CAT_COLOR[t.category] }} /> : <Wallet size={16} style={{ color: CAT_COLOR[t.category] }} />}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2"><span className="truncate text-sm font-medium">{t.title}</span>
+                            {t.mode === "installment" && <span className="shrink-0 rounded-md bg-violet-400/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-300">{r.all ? `${t.installments} taksit` : `${r.k}/${r.n}`}</span>}
+                            {t.mode === "recurring" && <span className="shrink-0 rounded-md bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">Her ay</span>}</div>
+                          <div className="truncate text-xs text-zinc-500">{t.category} · {t.method}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className={`text-sm font-semibold ${isInc ? "text-emerald-400" : "text-rose-400"}`}>{isInc ? "+" : "−"}<Money v={r.amt} d2 /></div>
+                          {t.mode === "installment" && r.all && <div className="text-[11px] text-zinc-600">toplam</div>}
+                        </div>
+                        <button onClick={() => del(t)} className="rounded-lg p-1.5 text-zinc-600 transition hover:bg-rose-400/10 hover:text-rose-400 sm:opacity-0 sm:group-hover:opacity-100" title="Sil"><Trash2 size={15} /></button>
+                      </div>);
+                  })}
+                </div>))}
+            </div>
+          </Card>
+          <div className="flex items-center justify-between px-1 text-xs text-zinc-600">
+            <span>Veriler yalnızca bu cihazın tarayıcısında saklanır. Düzenli yedek alın.</span>
+            <button onClick={clearAll} className="hover:text-rose-400">Tüm verileri sil</button>
+          </div>
+        </main>
+        {modal && <AddModal onClose={() => setModal(false)} onSave={(tx) => { setTxs((p) => [...p, tx]); setYm(tx.date.slice(0, 7)); setModal(false); }} />}
+      </div>
+    </PrivCtx.Provider>
+  );
+}
+
+createRoot(document.getElementById("root")).render(<App />);
+
+</script>
+<script>if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('sw.js');</script>
+</body>
+</html>
