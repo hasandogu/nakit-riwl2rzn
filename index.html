@@ -66,6 +66,20 @@ const tarihTR = (t) => (t ? t.split("-").reverse().join(".") : "");
 const addDay = (d) => { const x = new Date(d + "T00:00:00"); x.setDate(x.getDate() + 1); return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`; };
 const daysBetween = (a, b) => Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 864e5);
 const gunText = (n) => (n < 0 ? `${-n} gün gecikti` : n === 0 ? "bugün" : `${n} gün kaldı`);
+/** Her kart için aylık tekrarlayan "son ödeme günü" etkinliği; 1 gün önce 09:00'da hatırlatır. */
+function buildIcs(cards, today) {
+  const cur = today.slice(0, 7), stamp = today.replace(/-/g, "") + "T000000Z";
+  const ev = cards.map((c) => {
+    const m = dayIn(cur, c.dueDay) >= today ? cur : addM(cur, 1);
+    const start = dayIn(m, c.dueDay).replace(/-/g, "");
+    const rule = c.dueDay > 28 ? "BYMONTHDAY=-1" : `BYMONTHDAY=${c.dueDay}`;
+    const name = String(c.name).replace(/[,;\\\r\n]/g, " ");
+    return ["BEGIN:VEVENT", `UID:${c.id}-son-odeme@nakit-akisi`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${start}`, `RRULE:FREQ=MONTHLY;${rule}`,
+      `SUMMARY:💳 ${name} son ödeme günü`, "DESCRIPTION:Kart ekstresinin son ödeme günü. Ödemeyi unutmayın.",
+      "BEGIN:VALARM", "TRIGGER:-PT15H", "ACTION:DISPLAY", "DESCRIPTION:Yarın kart son ödeme günü", "END:VALARM", "END:VEVENT"].join("\r\n");
+  });
+  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Nakit Akisi//TR", "CALSCALE:GREGORIAN", ...ev, "END:VCALENDAR"].join("\r\n") + "\r\n";
+}
 const SEED_CARDS = [
   { id: "c1", name: "Garanti Bonus", cutDay: 15, dueDay: 25, limit: 120000 },
   { id: "c2", name: "Yapı Kredi World", cutDay: 5, dueDay: 15, limit: 40000 },
@@ -375,6 +389,12 @@ function App() {
     return { card, curS, prevS, isPaid, future, used, daysToCut: daysBetween(today, curS.end), daysToDue: daysBetween(today, prevS.due) };
   };
   const cardSt = cards.map(cardStats);
+  const addToCalendar = async () => {
+    const file = new File([buildIcs(cards, todayStr())], "kart-son-odeme.ics", { type: "text/calendar" });
+    try { if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: "Kart son ödeme hatırlatmaları" }); return; } }
+    catch (e) { if (e?.name === "AbortError") return; }
+    const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = "kart-son-odeme.ics"; a.click();
+  };
   const dueTone = (n) => (n <= 3 ? "text-rose-400" : n <= 7 ? "text-amber-400" : "text-zinc-400");
 
   /* ───── Sekme içerikleri ───── */
@@ -621,6 +641,9 @@ function App() {
               {s.curS.items.length > 5 && <div className="border-t border-white/5 px-5 py-2 text-xs text-zinc-500">+{s.curS.items.length - 5} işlem daha…</div>}</div>)}
           </Card>); })}
         <button onClick={() => setCardModal("new")} className="w-full rounded-2xl border border-dashed border-white/15 py-4 text-sm text-zinc-300 transition hover:bg-white/5">+ Kart ekle</button>
+        {cards.length > 0 && (<div>
+          <button onClick={addToCalendar} className="w-full rounded-2xl border border-white/10 bg-zinc-900/60 py-3.5 text-sm text-zinc-200 transition hover:bg-white/5">📅 Son ödeme hatırlatmalarını Takvim'e ekle</button>
+          <div className="mt-2 px-1 text-xs text-zinc-600">Her ay, son ödeme gününden 1 gün önce saat 09:00'da hatırlatır. Kart günlerini değiştirirseniz eski etkinlikleri Takvim'den silip yeniden ekleyin.</div></div>)}
       </div>
     );
   };
