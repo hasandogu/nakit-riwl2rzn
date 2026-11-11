@@ -33,6 +33,7 @@ import React, { useState, useMemo, useEffect, useRef, useContext, createContext 
 import {
   Eye, EyeOff, Download, Upload, Plus, Trash2, Search, ChevronLeft, ChevronRight, X,
   Wallet, TrendingUp, TrendingDown, PiggyBank, CreditCard, Repeat, Layers, Pencil,
+  LayoutDashboard, Receipt, BarChart3, Target, Settings,
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell,
@@ -102,7 +103,7 @@ function buildSeed() {
 }
 function loadStore() {
   try { const r = JSON.parse(localStorage.getItem(KEY)); if (r && Array.isArray(r.txs)) return r; } catch (e) {}
-  return { txs: buildSeed(), budget: 32000, priv: false };
+  return { txs: buildSeed(), budget: 32000, priv: false, catBudgets: {} };
 }
 
 /* ───────────── Küçük bileşenler ───────────── */
@@ -110,9 +111,11 @@ const Money = ({ v, d2, className = "" }) => {
   const priv = useContext(PrivCtx);
   return <span className={`tabular-nums transition ${priv ? "blur-sm select-none" : ""} ${className}`}>{d2 ? fmt2(v) : fmt(v)}</span>;
 };
-const Card = ({ className = "", children }) => (
-  <div className={`rounded-2xl border border-white/10 bg-zinc-900/60 backdrop-blur-md p-5 ${className}`}>{children}</div>
+const Card = ({ className = "", children, onClick }) => (
+  <div onClick={onClick} role={onClick ? "button" : undefined} tabIndex={onClick ? 0 : undefined}
+    className={`rounded-2xl border border-white/10 bg-zinc-900/60 backdrop-blur-md p-5 ${onClick ? "cursor-pointer transition hover:border-white/25 active:scale-[0.99]" : ""} ${className}`}>{children}</div>
 );
+const Go = () => <ChevronRight size={15} className="text-zinc-600" />;
 const Label = ({ icon: I, children, tone = "text-zinc-400" }) => (
   <div className={`flex items-center gap-2 text-xs font-medium uppercase tracking-wider ${tone}`}>{I && <I size={14} />}{children}</div>
 );
@@ -129,21 +132,21 @@ const ChartTip = ({ active, payload, label }) => {
 };
 
 /* ───────────── İşlem ekleme penceresi ───────────── */
-function AddModal({ onClose, onSave }) {
-  const [f, setF] = useState({ type: "expense", title: "", amount: "", category: EXP_CATS[0], method: METHODS[1], date: todayStr(), mode: "single", installments: 3 });
+function AddModal({ onClose, onSave, onDelete, initial }) {
+  const [f, setF] = useState(initial ? { ...initial, amount: String(initial.amount) } : { type: "expense", title: "", amount: "", category: EXP_CATS[0], method: METHODS[1], date: todayStr(), mode: "single", installments: 3 });
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const setType = (t) => setF((p) => ({ ...p, type: t, category: t === "income" ? INC_CATS[0] : EXP_CATS[0], mode: t === "income" && p.mode === "installment" ? "single" : p.mode }));
   const valid = f.title.trim() && +f.amount > 0 && f.date;
   useEffect(() => { const h = (e) => e.key === "Escape" && onClose(); window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [onClose]);
   const submit = (e) => {
     e.preventDefault(); if (!valid) return;
-    onSave({ id: uid(), type: f.type, title: f.title.trim(), amount: +f.amount, category: f.category, method: f.method, date: f.date, mode: f.mode, installments: f.mode === "installment" ? +f.installments : 1 });
+    onSave({ id: initial?.id || uid(), type: f.type, title: f.title.trim(), amount: +f.amount, category: f.category, method: f.method, date: f.date, mode: f.mode, installments: f.mode === "installment" ? +f.installments : 1 });
   };
   const per = f.mode === "installment" && +f.amount > 0 ? +f.amount / +f.installments : 0;
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4" onClick={onClose}>
       <form onSubmit={submit} onClick={(e) => e.stopPropagation()} className="w-full sm:max-w-md max-h-[92vh] overflow-auto rounded-t-3xl sm:rounded-3xl border border-white/10 bg-zinc-950 p-5 shadow-2xl">
-        <div className="mb-4 flex items-center justify-between"><h2 className="text-lg font-semibold">Yeni İşlem</h2>
+        <div className="mb-4 flex items-center justify-between"><h2 className="text-lg font-semibold">{initial ? "İşlemi Düzenle" : "Yeni İşlem"}</h2>
           <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-zinc-400 hover:bg-white/10"><X size={18} /></button></div>
         <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-zinc-900 p-1">
           {[["expense", "Gider", "bg-rose-400/20 text-rose-300"], ["income", "Gelir", "bg-emerald-400/20 text-emerald-300"]].map(([t, l, c]) => (
@@ -176,20 +179,51 @@ function AddModal({ onClose, onSave }) {
             </div>)}
           {f.mode === "recurring" && <div className="rounded-xl border border-amber-400/20 bg-amber-400/5 p-3 text-xs text-amber-200/80">Bu işlem seçilen tarihten itibaren her ay otomatik olarak yansır.</div>}
         </div>
+        {initial && f.mode !== "single" && <div className="mt-3 text-xs text-zinc-500">Değişiklik serinin tüm aylarına uygulanır.</div>}
         <button disabled={!valid} className="mt-5 w-full rounded-xl bg-white py-2.5 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-200 disabled:opacity-30">Kaydet</button>
+        {initial && <button type="button" onClick={onDelete} className="mt-2 w-full rounded-xl border border-rose-400/30 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-400/10">Sil</button>}
       </form>
     </div>
   );
 }
 
 /* ───────────── Ana uygulama ───────────── */
+const TABS = [
+  ["ozet", "Özet", LayoutDashboard], ["islemler", "İşlemler", Receipt], ["taksit", "Taksit", Layers],
+  ["sabit", "Sabit", Repeat], ["analiz", "Analiz", BarChart3], ["butce", "Bütçe", Target], ["ayar", "Ayarlar", Settings],
+];
+const hashTab = () => { const h = (window.location.hash || "").replace("#/", ""); return TABS.some((t) => t[0] === h) ? h : "ozet"; };
+
+const TxRow = ({ r, onOpen, onDel }) => {
+  const t = r.tx, isInc = t.type === "income";
+  return (
+    <div onClick={() => onOpen(t)} className="group flex cursor-pointer items-center gap-3 border-t border-white/5 px-4 py-3 transition hover:bg-white/[0.04] active:bg-white/[0.07]">
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl" style={{ background: isInc ? "rgba(52,211,153,.15)" : (CAT_COLOR[t.category] || "#94a3b8") + "26" }}>
+        {isInc ? <TrendingUp size={16} className="text-emerald-400" /> : t.mode === "installment" ? <Layers size={16} className="text-violet-300" /> : t.mode === "recurring" ? <Repeat size={16} className="text-amber-400" /> : t.method === "Kredi Kartı" ? <CreditCard size={16} style={{ color: CAT_COLOR[t.category] }} /> : <Wallet size={16} style={{ color: CAT_COLOR[t.category] }} />}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2"><span className="truncate text-sm font-medium">{t.title}</span>
+          {t.mode === "installment" && <span className="shrink-0 rounded-md bg-violet-400/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-300">{r.all ? `${t.installments} taksit` : `${r.k}/${r.n}`}</span>}
+          {t.mode === "recurring" && <span className="shrink-0 rounded-md bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">Her ay</span>}</div>
+        <div className="truncate text-xs text-zinc-500">{t.category} · {t.method}</div>
+      </div>
+      <div className="text-right">
+        <div className={`text-sm font-semibold ${isInc ? "text-emerald-400" : "text-rose-400"}`}>{isInc ? "+" : "−"}<Money v={r.amt} d2 /></div>
+        {t.mode === "installment" && r.all && <div className="text-[11px] text-zinc-600">toplam</div>}
+      </div>
+      <button onClick={(e) => { e.stopPropagation(); onDel(t); }} className="rounded-lg p-2 text-zinc-600 transition hover:bg-rose-400/10 hover:text-rose-400" title="Sil"><Trash2 size={15} /></button>
+    </div>
+  );
+};
+
 function App() {
   const init = useMemo(loadStore, []);
   const [txs, setTxs] = useState(init.txs);
   const [budget, setBudget] = useState(init.budget ?? 32000);
+  const [catBudgets, setCatBudgets] = useState(init.catBudgets || {});
   const [priv, setPriv] = useState(!!init.priv);
   const [ym, setYm] = useState(todayStr().slice(0, 7));
-  const [modal, setModal] = useState(false);
+  const [tab, setTabRaw] = useState(hashTab);
+  const [modal, setModal] = useState(null); // null | "new" | tx
   const [q, setQ] = useState("");
   const [fCat, setFCat] = useState("Tümü");
   const [fMethod, setFMethod] = useState("Tümü");
@@ -197,55 +231,67 @@ function App() {
   const [editBudget, setEditBudget] = useState(false);
   const fileRef = useRef(null);
 
-  useEffect(() => { localStorage.setItem(KEY, JSON.stringify({ txs, budget, priv })); }, [txs, budget, priv]);
+  const setTab = (t) => { setTabRaw(t); try { window.history.replaceState(null, "", "#/" + t); } catch (e) {} window.scrollTo(0, 0); };
+  const goTo = (t, o = {}) => { if (o.cat !== undefined) { setFCat(o.cat); setAllMonths(false); setQ(""); setFMethod("Tümü"); } setTab(t); };
+  useEffect(() => { localStorage.setItem(KEY, JSON.stringify({ txs, budget, priv, catBudgets })); }, [txs, budget, priv, catBudgets]);
+  useEffect(() => { const h = () => setTabRaw(hashTab()); window.addEventListener("hashchange", h); return () => window.removeEventListener("hashchange", h); }, []);
 
+  /* hesaplamalar */
   const occ = useMemo(() => monthOcc(txs, ym), [txs, ym]);
+  const expOcc = occ.filter((o) => o.tx.type === "expense");
   const inc = sumBy(occ.filter((o) => o.tx.type === "income"), (o) => o.amt);
-  const exp = sumBy(occ.filter((o) => o.tx.type === "expense"), (o) => o.amt);
+  const exp = sumBy(expOcc, (o) => o.amt);
   const net = inc - exp;
   const saveRate = inc > 0 ? (net / inc) * 100 : 0;
   const remaining = budget - exp;
   const usedPct = budget > 0 ? Math.min(100, (exp / budget) * 100) : 0;
+  const catSum = (list) => { const m = {}; list.forEach((o) => { m[o.tx.category] = (m[o.tx.category] || 0) + o.amt; }); return m; };
+  const catNow = useMemo(() => catSum(expOcc), [occ]);
+  const catPrev = useMemo(() => catSum(monthOcc(txs, addM(ym, -1)).filter((o) => o.tx.type === "expense")), [txs, ym]);
+  const pie = Object.entries(catNow).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
 
-  const pie = useMemo(() => {
-    const m = {};
-    occ.filter((o) => o.tx.type === "expense").forEach((o) => { m[o.tx.category] = (m[o.tx.category] || 0) + o.amt; });
-    return Object.entries(m).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
-  }, [occ]);
-
-  const six = useMemo(() => Array.from({ length: 6 }, (_, i) => {
-    const m = addM(ym, i - 5), o = monthOcc(txs, m);
-    return { name: monthShort(m), Gelir: Math.round(sumBy(o.filter((x) => x.tx.type === "income"), (x) => x.amt)), Gider: Math.round(sumBy(o.filter((x) => x.tx.type === "expense"), (x) => x.amt)) };
-  }), [txs, ym]);
+  const monthsBack = (n) => Array.from({ length: n }, (_, i) => addM(ym, i - (n - 1)));
+  const series = (n) => monthsBack(n).map((m) => { const o = monthOcc(txs, m); const g = sumBy(o.filter((x) => x.tx.type === "income"), (x) => x.amt), d = sumBy(o.filter((x) => x.tx.type === "expense"), (x) => x.amt); return { name: monthShort(m), Gelir: Math.round(g), Gider: Math.round(d), Net: Math.round(g - d) }; });
+  const six = useMemo(() => series(6), [txs, ym]);
+  const twelve = useMemo(() => series(12), [txs, ym]);
 
   const instAll = txs.filter((t) => t.type === "expense" && t.mode === "installment");
-  const future = useMemo(() => Array.from({ length: 6 }, (_, i) => {
-    const m = addM(ym, i + 1);
-    return { name: monthShort(m), "Taksit": Math.round(sumBy(monthOcc(instAll, m), (x) => x.amt)) };
-  }), [txs, ym]);
-  const activeInst = instAll.map((t) => {
-    const per = t.amount / t.installments, paid = Math.min(t.installments, Math.max(0, idx(ym) - idx(t.date.slice(0, 7)) + 1));
-    return { t, per, left: t.installments - paid, remain: per * (t.installments - paid) };
-  }).filter((x) => x.left > 0);
+  const instInfo = instAll.map((t) => {
+    const start = t.date.slice(0, 7), per = t.amount / t.installments;
+    const paid = Math.min(t.installments, Math.max(0, idx(ym) - idx(start) + 1));
+    return { t, per, paid, left: t.installments - paid, remain: per * (t.installments - paid), end: addM(start, t.installments - 1), started: idx(ym) >= idx(start) };
+  });
+  const activeInst = instInfo.filter((x) => x.left > 0);
   const totalDebt = sumBy(activeInst, (x) => x.remain);
+  const thisMonthInst = sumBy(monthOcc(instAll, ym), (x) => x.amt);
+  const future = (n, from) => Array.from({ length: n }, (_, i) => { const m = addM(ym, i + from); return { name: monthShort(m), Taksit: Math.round(sumBy(monthOcc(instAll, m), (x) => x.amt)) }; });
+  const future6 = useMemo(() => future(6, 1), [txs, ym]);
+  const future12 = useMemo(() => future(12, 0), [txs, ym]);
 
-  const fixed = occ.filter((o) => o.tx.type === "expense" && o.tx.mode === "recurring");
-  const fixedTotal = sumBy(fixed, (o) => o.amt);
+  const fixedExp = expOcc.filter((o) => o.tx.mode === "recurring");
+  const fixedInc = occ.filter((o) => o.tx.type === "income" && o.tx.mode === "recurring");
+  const fixedTotal = sumBy(fixedExp, (o) => o.amt), fixedIncTotal = sumBy(fixedInc, (o) => o.amt);
 
   const rows = useMemo(() => {
-    const base = allMonths ? txs.map((tx) => ({ tx, amt: tx.mode === "installment" ? tx.amount : tx.amount, all: true, date: tx.date })) : occ.map((o) => ({ ...o, date: dayIn(ym, +o.tx.date.slice(8)) }));
+    const base = allMonths ? txs.map((tx) => ({ tx, amt: tx.amount, all: true, date: tx.date })) : occ.map((o) => ({ ...o, date: dayIn(ym, +o.tx.date.slice(8)) }));
     const s = q.trim().toLocaleLowerCase("tr");
     return base.filter((r) => (fCat === "Tümü" || r.tx.category === fCat) && (fMethod === "Tümü" || r.tx.method === fMethod) && (!s || r.tx.title.toLocaleLowerCase("tr").includes(s) || r.tx.category.toLocaleLowerCase("tr").includes(s)))
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [txs, occ, ym, q, fCat, fMethod, allMonths]);
+  const grouped = [];
+  rows.forEach((r) => { if (grouped[grouped.length - 1]?.k !== r.date) grouped.push({ k: r.date, items: [] }); grouped[grouped.length - 1].items.push(r); });
+  const dayFmt = (d) => new Date(d + "T00:00:00").toLocaleDateString("tr-TR", { day: "numeric", month: "long", weekday: "short" });
+  const blur = priv ? "blur-sm select-none" : "";
 
+  /* eylemler */
   const del = (tx) => {
     const seri = tx.mode !== "single";
-    if (window.confirm(seri ? `"${tx.title}" serisinin TÜM aylardaki kayıtları silinecek. Emin misiniz?` : `"${tx.title}" silinsin mi?`)) setTxs((p) => p.filter((x) => x.id !== tx.id));
+    if (window.confirm(seri ? `"${tx.title}" serisinin TÜM aylardaki kayıtları silinecek. Emin misiniz?` : `"${tx.title}" silinsin mi?`)) { setTxs((p) => p.filter((x) => x.id !== tx.id)); setModal(null); }
   };
+  const save = (tx) => { setTxs((p) => (p.some((x) => x.id === tx.id) ? p.map((x) => (x.id === tx.id ? tx : x)) : [...p, tx])); setYm(tx.date.slice(0, 7)); setModal(null); };
   const exportJson = () => {
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([JSON.stringify({ txs, budget }, null, 2)], { type: "application/json" }));
+    a.href = URL.createObjectURL(new Blob([JSON.stringify({ txs, budget, catBudgets }, null, 2)], { type: "application/json" }));
     a.download = `nakit-akisi-yedek-${todayStr()}.json`; a.click();
   };
   const importJson = (e) => {
@@ -255,170 +301,254 @@ function App() {
       try {
         const d = JSON.parse(r.result);
         if (!Array.isArray(d.txs) || !d.txs.every((t) => t.id && t.date && t.amount >= 0 && t.mode)) throw new Error();
-        if (window.confirm("Mevcut veriler silinip yedekteki veriler yüklenecek. Emin misiniz?")) { setTxs(d.txs); if (d.budget) setBudget(+d.budget); }
+        if (window.confirm("Mevcut veriler silinip yedekteki veriler yüklenecek. Emin misiniz?")) { setTxs(d.txs); if (d.budget) setBudget(+d.budget); setCatBudgets(d.catBudgets || {}); }
       } catch { window.alert("Geçersiz yedek dosyası."); }
     };
     r.readAsText(file); e.target.value = "";
   };
   const clearAll = () => { if (window.confirm("TÜM veriler (örnek veriler dahil) silinecek. Önce yedek almanızı öneririz. Devam edilsin mi?")) setTxs([]); };
+  const loadSample = () => { if (window.confirm("Mevcut veriler silinip örnek veriler yüklenecek. Emin misiniz?")) setTxs(buildSeed()); };
 
-  const grouped = [];
-  rows.forEach((r) => { const k = r.date; if (grouped[grouped.length - 1]?.k !== k) grouped.push({ k, items: [] }); grouped[grouped.length - 1].items.push(r); });
-  const dayFmt = (d) => new Date(d + "T00:00:00").toLocaleDateString("tr-TR", { day: "numeric", month: "long", weekday: "short" });
-  const blur = priv ? "blur-sm select-none" : "";
+  /* ───── Sekme içerikleri ───── */
+  const Ozet = () => (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-6">
+      <Card className="lg:col-span-3" onClick={() => goTo("islemler", { cat: "Tümü" })}>
+        <div className="flex items-center justify-between"><Label icon={net >= 0 ? TrendingUp : TrendingDown}>Bu Ayki Net Nakit Akışı</Label><Go /></div>
+        <div className={`mt-2 text-4xl font-semibold tracking-tight ${net >= 0 ? "text-emerald-400" : "text-rose-400"}`}><Money v={net} /></div>
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <div className="rounded-xl bg-white/[0.03] p-3"><div className="text-xs text-zinc-500">Gelir</div><div className="mt-1 text-lg font-medium text-emerald-400">+<Money v={inc} /></div></div>
+          <div className="rounded-xl bg-white/[0.03] p-3"><div className="text-xs text-zinc-500">Gider</div><div className="mt-1 text-lg font-medium text-rose-400">−<Money v={exp} /></div></div>
+        </div>
+      </Card>
+      <Card className="lg:col-span-3" onClick={() => setTab("butce")}>
+        <div className="flex items-center justify-between"><Label icon={PiggyBank}>Kalan Bütçe · Tasarruf</Label><Go /></div>
+        <div className="mt-2 flex items-end justify-between gap-3">
+          <div className={`text-4xl font-semibold tracking-tight ${remaining >= 0 ? "text-zinc-100" : "text-rose-400"}`}><Money v={remaining} /></div>
+          <div className="pb-1 text-right"><div className="text-xs text-zinc-500">Tasarruf oranı</div>
+            <div className={`text-xl font-semibold ${saveRate >= 0 ? "text-emerald-400" : "text-rose-400"} ${blur}`}>%{saveRate.toFixed(0)}</div></div>
+        </div>
+        <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10"><div className={`h-full rounded-full transition-all ${usedPct >= 100 ? "bg-rose-400" : usedPct >= 80 ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${usedPct}%` }} /></div>
+        <div className="mt-2 flex justify-between text-xs text-zinc-500"><span>Harcanan <Money v={exp} /></span><span>Aylık bütçe <Money v={budget} /></span></div>
+      </Card>
+      <Card className="lg:col-span-3" onClick={() => setTab("analiz")}>
+        <div className="flex items-center justify-between"><Label>Kategori Bazlı Harcama</Label><Go /></div>
+        {pie.length === 0 ? <div className="py-12 text-center text-sm text-zinc-500">Bu ay gider yok.</div> : (
+          <div className="mt-3 flex flex-col items-center gap-4 sm:flex-row">
+            <div className={`h-44 w-44 shrink-0 ${blur}`}><ResponsiveContainer width="100%" height="100%">
+              <PieChart><Pie isAnimationActive={false} data={pie} dataKey="value" innerRadius={52} outerRadius={80} paddingAngle={3} stroke="none">{pie.map((p) => <Cell key={p.name} fill={CAT_COLOR[p.name] || "#94a3b8"} />)}</Pie><Tooltip content={<ChartTip />} /></PieChart></ResponsiveContainer></div>
+            <ul className="w-full space-y-2 text-sm">{pie.map((p) => (
+              <li key={p.name} className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-zinc-300"><span className="h-2.5 w-2.5 rounded-full" style={{ background: CAT_COLOR[p.name] }} />{p.name}</span>
+                <span className="text-zinc-400"><Money v={p.value} /> <span className="text-zinc-600">· %{Math.round((p.value / exp) * 100)}</span></span></li>))}</ul>
+          </div>)}
+      </Card>
+      <Card className="lg:col-span-3" onClick={() => setTab("analiz")}>
+        <div className="flex items-center justify-between"><Label>Son 6 Ay · Gelir vs Gider</Label><Go /></div>
+        <div className={`mt-3 h-48 ${blur}`}><ResponsiveContainer width="100%" height="100%">
+          <BarChart data={six} barGap={4}><CartesianGrid vertical={false} stroke="rgba(255,255,255,0.06)" />
+            <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#71717a", fontSize: 12 }} />
+            <YAxis tickLine={false} axisLine={false} width={40} tick={{ fill: "#71717a", fontSize: 11 }} tickFormatter={(v) => (v >= 1000 ? `${Math.round(v / 1000)}k` : v)} />
+            <Tooltip content={<ChartTip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
+            <Bar isAnimationActive={false} dataKey="Gelir" fill="#34d399" radius={[6, 6, 0, 0]} /><Bar isAnimationActive={false} dataKey="Gider" fill="#fb7185" radius={[6, 6, 0, 0]} /></BarChart></ResponsiveContainer></div>
+      </Card>
+      <Card className="lg:col-span-3" onClick={() => setTab("taksit")}>
+        <div className="flex items-center justify-between"><Label icon={Layers}>Gelecek Ayların Taksit Yükü</Label><Go /></div>
+        <div className="mt-2 flex items-end justify-between"><div><div className="text-xs text-zinc-500">Devreden toplam taksit borcu</div>
+          <div className="text-3xl font-semibold tracking-tight text-violet-300"><Money v={totalDebt} /></div></div><div className="text-right text-xs text-zinc-500">{activeInst.length} aktif taksit</div></div>
+        <div className={`mt-3 h-28 ${blur}`}><ResponsiveContainer width="100%" height="100%">
+          <BarChart data={future6}><XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#71717a", fontSize: 11 }} />
+            <Tooltip content={<ChartTip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} /><Bar isAnimationActive={false} dataKey="Taksit" fill="#a78bfa" radius={[6, 6, 0, 0]} /></BarChart></ResponsiveContainer></div>
+      </Card>
+      <Card className="lg:col-span-3" onClick={() => setTab("sabit")}>
+        <div className="flex items-center justify-between"><Label icon={Repeat} tone="text-amber-400/80">Sabit Ödemeler</Label><Go /></div>
+        <div className="mt-2 text-3xl font-semibold tracking-tight text-amber-400"><Money v={fixedTotal} /></div>
+        <div className="text-xs text-zinc-500">{inc > 0 ? <>Gelirin <span className={blur}>%{Math.round((fixedTotal / inc) * 100)}</span>'i her ay sabit olarak çıkıyor</> : "Her ay otomatik tekrarlayan giderler"}</div>
+        <ul className="mt-3 space-y-1.5 text-sm">{fixedExp.length === 0 && <li className="text-zinc-500">Bu ay sabit ödeme yok.</li>}
+          {[...fixedExp].sort((a, b) => b.amt - a.amt).slice(0, 4).map((o) => (<li key={o.tx.id} className="flex items-center justify-between"><span className="text-zinc-300">{o.tx.title}</span><span className="text-amber-300/90"><Money v={o.amt} d2 /></span></li>))}
+          {fixedExp.length > 4 && <li className="text-xs text-zinc-600">+{fixedExp.length - 4} ödeme daha…</li>}</ul>
+      </Card>
+    </div>
+  );
+
+  const Islemler = () => (
+    <Card className="!p-0 overflow-hidden">
+      <div className="flex flex-col gap-2 border-b border-white/10 p-4 sm:flex-row sm:items-center">
+        <div className="relative flex-1"><Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+          <input className={`${inputCls} pl-9`} placeholder="İşlem ara…" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+        <select className={`${inputCls} sm:w-44`} value={fCat} onChange={(e) => setFCat(e.target.value)}><option>Tümü</option>{[...EXP_CATS, ...INC_CATS].map((c) => <option key={c}>{c}</option>)}</select>
+        <select className={`${inputCls} sm:w-40`} value={fMethod} onChange={(e) => setFMethod(e.target.value)}><option>Tümü</option>{METHODS.map((c) => <option key={c}>{c}</option>)}</select>
+        <button onClick={() => setAllMonths(!allMonths)} className={`whitespace-nowrap rounded-xl border px-3 py-2 text-sm ${allMonths ? "border-white/30 bg-white/10 text-white" : "border-white/10 text-zinc-400"}`}>{allMonths ? "Tüm aylar" : "Seçili ay"}</button>
+      </div>
+      <div className="flex items-center justify-between border-b border-white/5 px-4 py-2 text-xs text-zinc-500"><span>{rows.length} işlem · düzenlemek için dokunun</span>
+        {(fCat !== "Tümü" || fMethod !== "Tümü" || q) && <button onClick={() => { setFCat("Tümü"); setFMethod("Tümü"); setQ(""); }} className="text-zinc-300 underline">Filtreleri temizle</button>}</div>
+      <div>
+        {grouped.length === 0 && <div className="py-14 text-center text-sm text-zinc-500">Eşleşen işlem yok.</div>}
+        {grouped.map((g) => (<div key={g.k}><div className="bg-zinc-900/90 px-4 py-1.5 text-xs font-medium text-zinc-500">{dayFmt(g.k)}</div>
+          {g.items.map((r, i) => <TxRow key={r.tx.id + i} r={r} onOpen={setModal} onDel={del} />)}</div>))}
+      </div>
+    </Card>
+  );
+
+  const Taksit = () => (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-4">
+        <Card><Label icon={Layers}>Devreden Borç</Label><div className="mt-2 text-3xl font-semibold text-violet-300"><Money v={totalDebt} /></div><div className="mt-1 text-xs text-zinc-500">{activeInst.length} aktif taksit</div></Card>
+        <Card><Label>Bu Ayki Taksit</Label><div className="mt-2 text-3xl font-semibold text-zinc-100"><Money v={thisMonthInst} /></div><div className="mt-1 text-xs text-zinc-500">{monthLabel(ym)}</div></Card>
+      </div>
+      <Card><Label>Önümüzdeki 12 Ay · Taksit Yükü</Label>
+        <div className={`mt-3 h-44 ${blur}`}><ResponsiveContainer width="100%" height="100%"><BarChart data={future12}><CartesianGrid vertical={false} stroke="rgba(255,255,255,0.06)" />
+          <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#71717a", fontSize: 11 }} />
+          <YAxis tickLine={false} axisLine={false} width={40} tick={{ fill: "#71717a", fontSize: 11 }} tickFormatter={(v) => (v >= 1000 ? `${Math.round(v / 1000)}k` : v)} />
+          <Tooltip content={<ChartTip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} /><Bar isAnimationActive={false} dataKey="Taksit" fill="#a78bfa" radius={[6, 6, 0, 0]} /></BarChart></ResponsiveContainer></div></Card>
+      {instInfo.length === 0 && <Card><div className="py-8 text-center text-sm text-zinc-500">Taksitli işlem yok. + ile "Taksitli" seçerek ekleyin.</div></Card>}
+      {[...instInfo].sort((a, b) => (b.left > 0) - (a.left > 0) || b.remain - a.remain).map((x) => (
+        <Card key={x.t.id} onClick={() => setModal(x.t)} className={x.left === 0 ? "opacity-50" : ""}>
+          <div className="flex items-start justify-between gap-3"><div><div className="font-medium">{x.t.title}</div><div className="text-xs text-zinc-500">{x.t.method} · bitiş {monthLabel(x.end)}</div></div>
+            <div className="text-right"><div className="font-semibold text-violet-300"><Money v={x.per} d2 />/ay</div><div className="text-xs text-zinc-500">toplam <Money v={x.t.amount} /></div></div></div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-violet-400" style={{ width: `${(100 * x.paid) / x.t.installments}%` }} /></div>
+          <div className="mt-2 flex justify-between text-xs text-zinc-500"><span>{x.paid}/{x.t.installments} taksit ödendi</span><span>{x.left > 0 ? <>Kalan <Money v={x.remain} /></> : "Tamamlandı"}</span></div>
+        </Card>))}
+    </div>
+  );
+
+  const FixedList = ({ title, items, tone }) => (
+    <Card><Label tone={tone}>{title}</Label>
+      <ul className="mt-3 divide-y divide-white/5">{items.length === 0 && <li className="py-3 text-sm text-zinc-500">Yok.</li>}
+        {items.map((t) => (<li key={t.id} onClick={() => setModal(t)} className="flex cursor-pointer items-center justify-between py-3 transition hover:opacity-80">
+          <div><div className="text-sm font-medium">{t.title}</div><div className="text-xs text-zinc-500">{t.category} · {t.method} · her ayın {+t.date.slice(8)}. günü{idx(ym) < idx(t.date.slice(0, 7)) ? " · henüz başlamadı" : ""}</div></div>
+          <div className="flex items-center gap-2"><span className={`text-sm font-semibold ${t.type === "income" ? "text-emerald-400" : "text-amber-300"}`}><Money v={t.amount} d2 /></span><Go /></div></li>))}</ul></Card>
+  );
+  const Sabit = () => {
+    const rec = txs.filter((t) => t.mode === "recurring");
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-3 gap-3">
+          <Card className="!p-4"><div className="text-xs text-zinc-500">Sabit gelir</div><div className="mt-1 text-lg font-semibold text-emerald-400"><Money v={fixedIncTotal} /></div></Card>
+          <Card className="!p-4"><div className="text-xs text-zinc-500">Sabit gider</div><div className="mt-1 text-lg font-semibold text-amber-400"><Money v={fixedTotal} /></div></Card>
+          <Card className="!p-4"><div className="text-xs text-zinc-500">Net sabit</div><div className={`mt-1 text-lg font-semibold ${fixedIncTotal - fixedTotal >= 0 ? "text-emerald-400" : "text-rose-400"}`}><Money v={fixedIncTotal - fixedTotal} /></div></Card>
+        </div>
+        <FixedList title="Sabit Giderler" items={rec.filter((t) => t.type === "expense").sort((a, b) => b.amount - a.amount)} tone="text-amber-400/80" />
+        <FixedList title="Sabit Gelirler" items={rec.filter((t) => t.type === "income")} tone="text-emerald-400/80" />
+        <div className="px-1 text-xs text-zinc-600">Bir kaleme dokunarak tutarını veya tarihini düzenleyebilirsiniz.</div>
+      </div>
+    );
+  };
+
+  const Analiz = () => {
+    const byMethod = {}; expOcc.forEach((o) => { byMethod[o.tx.method] = (byMethod[o.tx.method] || 0) + o.amt; });
+    const top5 = [...expOcc].sort((a, b) => b.amt - a.amt).slice(0, 5);
+    const avg6 = six.reduce((s, x) => s + x.Gider, 0) / 6;
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Card><Label>Son 6 Ay Gider Ortalaması</Label><div className="mt-2 text-2xl font-semibold"><Money v={avg6} /></div><div className="mt-1 text-xs text-zinc-500">Bu ay: {exp > avg6 ? "ortalamanın üstünde" : "ortalamanın altında"}</div></Card>
+          <Card><Label>Tasarruf Oranı</Label><div className={`mt-2 text-2xl font-semibold ${saveRate >= 0 ? "text-emerald-400" : "text-rose-400"} ${blur}`}>%{saveRate.toFixed(0)}</div><div className="mt-1 text-xs text-zinc-500">{monthLabel(ym)}</div></Card>
+        </div>
+        <Card><Label>12 Aylık Net Nakit Akışı</Label>
+          <div className={`mt-3 h-48 ${blur}`}><ResponsiveContainer width="100%" height="100%"><BarChart data={twelve}><CartesianGrid vertical={false} stroke="rgba(255,255,255,0.06)" />
+            <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#71717a", fontSize: 11 }} />
+            <YAxis tickLine={false} axisLine={false} width={40} tick={{ fill: "#71717a", fontSize: 11 }} tickFormatter={(v) => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : v)} />
+            <Tooltip content={<ChartTip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
+            <Bar isAnimationActive={false} dataKey="Net" radius={[5, 5, 0, 0]}>{twelve.map((d, i) => <Cell key={i} fill={d.Net >= 0 ? "#34d399" : "#fb7185"} />)}</Bar></BarChart></ResponsiveContainer></div></Card>
+        <Card><Label>Kategoriler · önceki aya göre</Label>
+          <ul className="mt-3 divide-y divide-white/5">{pie.length === 0 && <li className="py-3 text-sm text-zinc-500">Bu ay gider yok.</li>}
+            {pie.map((p) => { const prev = catPrev[p.name] || 0, ch = prev > 0 ? ((p.value - prev) / prev) * 100 : null;
+              return (<li key={p.name} onClick={() => goTo("islemler", { cat: p.name })} className="flex cursor-pointer items-center justify-between gap-2 py-3 transition hover:opacity-80">
+                <span className="flex items-center gap-2 text-sm"><span className="h-2.5 w-2.5 rounded-full" style={{ background: CAT_COLOR[p.name] }} />{p.name}</span>
+                <span className="flex items-center gap-3 text-sm"><span className={`text-xs ${ch == null ? "text-zinc-600" : ch > 0 ? "text-rose-400" : "text-emerald-400"} ${blur}`}>{ch == null ? "yeni" : `${ch > 0 ? "▲" : "▼"} %${Math.abs(Math.round(ch))}`}</span><Money v={p.value} /><Go /></span></li>); })}</ul></Card>
+        <Card><Label>Ödeme Yöntemine Göre Gider</Label>
+          <div className="mt-3 space-y-3">{Object.entries(byMethod).sort((a, b) => b[1] - a[1]).map(([m, v]) => (
+            <div key={m}><div className="flex justify-between text-sm"><span className="text-zinc-300">{m}</span><span><Money v={v} /> <span className="text-zinc-600">· %{Math.round((v / exp) * 100)}</span></span></div>
+              <div className="mt-1 h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-sky-400" style={{ width: `${(100 * v) / exp}%` }} /></div></div>))}
+            {exp === 0 && <div className="text-sm text-zinc-500">Bu ay gider yok.</div>}</div></Card>
+        <Card className="!p-0 overflow-hidden"><div className="p-5 pb-2"><Label>Bu Ayın En Büyük 5 Harcaması</Label></div>
+          {top5.map((o, i) => <TxRow key={o.tx.id + i} r={{ ...o }} onOpen={setModal} onDel={del} />)}{top5.length === 0 && <div className="px-5 pb-5 text-sm text-zinc-500">Yok.</div>}</Card>
+      </div>
+    );
+  };
+
+  const Butce = () => (
+    <div className="space-y-4">
+      <Card>
+        <div className="flex items-center justify-between"><Label icon={PiggyBank}>Aylık Toplam Bütçe</Label>
+          <button onClick={() => setEditBudget(!editBudget)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-white/10 hover:text-white"><Pencil size={15} /></button></div>
+        {editBudget ? <input autoFocus type="number" inputMode="decimal" className={`${inputCls} mt-2`} defaultValue={budget} onBlur={(e) => { setBudget(Math.max(0, +e.target.value || 0)); setEditBudget(false); }} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
+          : <div className="mt-2 text-3xl font-semibold"><Money v={budget} /></div>}
+        <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-white/10"><div className={`h-full rounded-full ${usedPct >= 100 ? "bg-rose-400" : usedPct >= 80 ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${usedPct}%` }} /></div>
+        <div className="mt-2 flex justify-between text-xs text-zinc-500"><span>Harcanan <Money v={exp} /></span><span className={remaining < 0 ? "text-rose-400" : ""}>{remaining >= 0 ? <>Kalan <Money v={remaining} /></> : <>Aşım <Money v={-remaining} /></>}</span></div>
+      </Card>
+      <Card><Label icon={Target}>Kategori Limitleri</Label><div className="mt-1 text-xs text-zinc-500">Limit yazın, harcama o limite yaklaştıkça renk değiştirir. Boş bırakırsanız limit yok.</div>
+        <div className="mt-4 space-y-5">{EXP_CATS.map((c) => {
+          const spent = catNow[c] || 0, lim = +catBudgets[c] || 0, p = lim > 0 ? (spent / lim) * 100 : 0;
+          return (<div key={c}><div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-sm"><span className="h-2.5 w-2.5 rounded-full" style={{ background: CAT_COLOR[c] }} />{c}</span>
+            <input type="number" inputMode="decimal" placeholder="Limit ₺" defaultValue={lim || ""} onBlur={(e) => setCatBudgets((p0) => ({ ...p0, [c]: Math.max(0, +e.target.value || 0) }))} className="w-28 rounded-lg border border-white/10 bg-zinc-900 px-2 py-1.5 text-right text-sm outline-none focus:border-white/30" /></div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10"><div className={`h-full rounded-full ${p >= 100 ? "bg-rose-400" : p >= 80 ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${Math.min(100, lim ? p : 0)}%` }} /></div>
+            <div className="mt-1 flex justify-between text-xs text-zinc-500"><span>Harcanan <Money v={spent} /></span><span>{lim > 0 ? (p >= 100 ? <span className="text-rose-400">Limit aşıldı</span> : <>Kalan <Money v={lim - spent} /></>) : "Limit yok"}</span></div></div>);
+        })}</div></Card>
+    </div>
+  );
+
+  const Ayar = () => (
+    <div className="space-y-4">
+      <Card><Label>Yedekleme</Label><div className="mt-1 text-xs text-zinc-500">Veriler yalnızca bu cihazda saklanır. Haftada bir yedek alın.</div>
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <button onClick={exportJson} className="flex items-center justify-center gap-2 rounded-xl bg-white py-3 text-sm font-semibold text-zinc-900"><Download size={16} />JSON İndir</button>
+          <button onClick={() => fileRef.current?.click()} className="flex items-center justify-center gap-2 rounded-xl border border-white/15 py-3 text-sm font-medium"><Upload size={16} />JSON Yükle</button></div></Card>
+      <Card><Label>Gizlilik Modu</Label>
+        <button onClick={() => setPriv(!priv)} className="mt-3 flex w-full items-center justify-between rounded-xl border border-white/10 px-4 py-3 text-sm"><span className="flex items-center gap-2">{priv ? <EyeOff size={16} /> : <Eye size={16} />}Rakamları bulanıklaştır</span>
+          <span className={`rounded-full px-2.5 py-0.5 text-xs ${priv ? "bg-emerald-400/20 text-emerald-300" : "bg-white/10 text-zinc-400"}`}>{priv ? "Açık" : "Kapalı"}</span></button></Card>
+      <Card><Label>Veri</Label>
+        <div className="mt-3 space-y-2"><button onClick={loadSample} className="w-full rounded-xl border border-white/10 py-3 text-sm text-zinc-300">Örnek verileri yükle</button>
+          <button onClick={clearAll} className="w-full rounded-xl border border-rose-400/30 py-3 text-sm text-rose-300">Tüm verileri sil</button></div>
+        <div className="mt-3 text-xs text-zinc-600">{txs.length} kayıt · veriler bu cihazın tarayıcısında saklanır.</div></Card>
+    </div>
+  );
+
+  const content = { ozet: Ozet, islemler: Islemler, taksit: Taksit, sabit: Sabit, analiz: Analiz, butce: Butce, ayar: Ayar }[tab];
 
   return (
     <PrivCtx.Provider value={priv}>
       <div className="min-h-screen bg-zinc-950 text-zinc-100 antialiased" style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, system-ui, sans-serif" }}>
         <div className="pointer-events-none fixed inset-x-0 top-0 h-72 bg-gradient-to-b from-emerald-500/10 via-transparent to-transparent" />
-        {/* Üst bar */}
-        <header className="sticky top-0 z-30 border-b border-white/10 bg-zinc-950/70 backdrop-blur-xl" style={{ paddingTop: "env(safe-area-inset-top)" }}>
-          <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-2 px-4 py-3">
-            <div className="mr-auto flex items-center gap-2"><div className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-400/15 text-emerald-300"><Wallet size={17} /></div>
-              <span className="text-[15px] font-semibold tracking-tight">Nakit Akışı</span></div>
-            <div className="flex items-center rounded-xl border border-white/10 bg-zinc-900/60">
-              <button onClick={() => setYm(addM(ym, -1))} className="p-2 text-zinc-400 hover:text-white" aria-label="Önceki ay"><ChevronLeft size={16} /></button>
-              <button onClick={() => setYm(todayStr().slice(0, 7))} className="min-w-[116px] px-1 text-center text-sm font-medium capitalize">{monthLabel(ym)}</button>
-              <button onClick={() => setYm(addM(ym, 1))} className="p-2 text-zinc-400 hover:text-white" aria-label="Sonraki ay"><ChevronRight size={16} /></button>
+        <header className="sticky top-0 z-30 border-b border-white/10 bg-zinc-950/80 backdrop-blur-xl" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+          <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-3">
+            <button onClick={() => setTab("ozet")} className="mr-auto flex items-center gap-2"><div className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-400/15 text-emerald-300"><Wallet size={17} /></div>
+              <span className="hidden text-[15px] font-semibold tracking-tight sm:inline">Nakit Akışı</span></button>
+            {tab !== "ayar" && (
+              <div className="flex items-center rounded-xl border border-white/10 bg-zinc-900/60">
+                <button onClick={() => setYm(addM(ym, -1))} className="p-2.5 text-zinc-400 hover:text-white" aria-label="Önceki ay"><ChevronLeft size={16} /></button>
+                <button onClick={() => setYm(todayStr().slice(0, 7))} className="min-w-[112px] px-1 text-center text-sm font-medium capitalize">{monthLabel(ym)}</button>
+                <button onClick={() => setYm(addM(ym, 1))} className="p-2.5 text-zinc-400 hover:text-white" aria-label="Sonraki ay"><ChevronRight size={16} /></button>
+              </div>)}
+            <div className="ml-auto flex items-center gap-2">
+              <button onClick={() => setPriv(!priv)} title="Gizlilik Modu" className={`rounded-xl border p-2.5 transition ${priv ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : "border-white/10 bg-zinc-900/60 text-zinc-400 hover:text-white"}`}>{priv ? <EyeOff size={17} /> : <Eye size={17} />}</button>
+              <button onClick={exportJson} title="JSON İndir (Yedekle)" className="hidden items-center gap-1.5 rounded-xl border border-white/10 bg-zinc-900/60 px-2.5 py-2.5 text-xs text-zinc-300 hover:text-white sm:flex"><Download size={15} />JSON İndir</button>
+              <button onClick={() => fileRef.current?.click()} title="JSON Yükle" className="hidden items-center gap-1.5 rounded-xl border border-white/10 bg-zinc-900/60 px-2.5 py-2.5 text-xs text-zinc-300 hover:text-white sm:flex"><Upload size={15} />JSON Yükle</button>
+              <button onClick={() => setTab("ayar")} title="Ayarlar" className={`rounded-xl border p-2.5 ${tab === "ayar" ? "border-white/30 bg-white/10 text-white" : "border-white/10 bg-zinc-900/60 text-zinc-400 hover:text-white"}`}><Settings size={17} /></button>
+              <button onClick={() => setModal("new")} className="hidden items-center gap-1.5 rounded-xl bg-white px-3 py-2.5 text-sm font-semibold text-zinc-900 hover:bg-zinc-200 sm:flex"><Plus size={16} />İşlem</button>
             </div>
-            <button onClick={() => setPriv(!priv)} title="Gizlilik Modu" className={`rounded-xl border p-2 transition ${priv ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : "border-white/10 bg-zinc-900/60 text-zinc-400 hover:text-white"}`}>{priv ? <EyeOff size={17} /> : <Eye size={17} />}</button>
-            <button onClick={exportJson} title="JSON İndir (Yedekle)" className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-zinc-900/60 px-2.5 py-2 text-xs text-zinc-300 hover:text-white"><Download size={15} /><span className="hidden sm:inline">JSON İndir</span></button>
-            <button onClick={() => fileRef.current?.click()} title="JSON Yükle" className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-zinc-900/60 px-2.5 py-2 text-xs text-zinc-300 hover:text-white"><Upload size={15} /><span className="hidden sm:inline">JSON Yükle</span></button>
             <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" onChange={importJson} />
-            <button onClick={() => setModal(true)} className="flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-sm font-semibold text-zinc-900 hover:bg-zinc-200"><Plus size={16} />İşlem</button>
+          </div>
+          {/* Masaüstü sekmeleri */}
+          <div className="mx-auto hidden max-w-6xl gap-1 px-4 pb-2 md:flex">
+            {TABS.slice(0, 6).map(([k, l, I]) => (<button key={k} onClick={() => setTab(k)} className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition ${tab === k ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-200"}`}><I size={15} />{l}</button>))}
           </div>
         </header>
 
-        <main className="relative mx-auto max-w-6xl space-y-4 px-4 pb-24 pt-5">
-          {/* Bento grid */}
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-6">
-            <Card className="lg:col-span-3">
-              <Label icon={net >= 0 ? TrendingUp : TrendingDown}>Bu Ayki Net Nakit Akışı</Label>
-              <div className={`mt-2 text-4xl font-semibold tracking-tight ${net >= 0 ? "text-emerald-400" : "text-rose-400"}`}><Money v={net} /></div>
-              <div className="mt-5 grid grid-cols-2 gap-3">
-                <div className="rounded-xl bg-white/[0.03] p-3"><div className="text-xs text-zinc-500">Gelir</div><div className="mt-1 text-lg font-medium text-emerald-400">+<Money v={inc} /></div></div>
-                <div className="rounded-xl bg-white/[0.03] p-3"><div className="text-xs text-zinc-500">Gider</div><div className="mt-1 text-lg font-medium text-rose-400">−<Money v={exp} /></div></div>
-              </div>
-            </Card>
-            <Card className="lg:col-span-3">
-              <div className="flex items-start justify-between">
-                <Label icon={PiggyBank}>Kalan Bütçe · Tasarruf</Label>
-                <button onClick={() => setEditBudget(!editBudget)} className="rounded-lg p-1 text-zinc-500 hover:bg-white/10 hover:text-white" title="Aylık bütçeyi düzenle"><Pencil size={14} /></button>
-              </div>
-              <div className="mt-2 flex items-end justify-between gap-3">
-                <div className={`text-4xl font-semibold tracking-tight ${remaining >= 0 ? "text-zinc-100" : "text-rose-400"}`}><Money v={remaining} /></div>
-                <div className="pb-1 text-right"><div className="text-xs text-zinc-500">Tasarruf oranı</div>
-                  <div className={`text-xl font-semibold ${saveRate >= 0 ? "text-emerald-400" : "text-rose-400"} ${blur}`}>%{saveRate.toFixed(0)}</div></div>
-              </div>
-              <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10"><div className={`h-full rounded-full transition-all ${usedPct >= 100 ? "bg-rose-400" : usedPct >= 80 ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${usedPct}%` }} /></div>
-              <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
-                <span>Harcanan <Money v={exp} /></span>
-                {editBudget ? <input autoFocus type="number" className="w-28 rounded-lg bg-zinc-800 px-2 py-1 text-right text-xs text-white outline-none" defaultValue={budget} onBlur={(e) => { setBudget(Math.max(0, +e.target.value || 0)); setEditBudget(false); }} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
-                  : <span>Aylık bütçe <Money v={budget} /></span>}
-              </div>
-            </Card>
-
-            <Card className="lg:col-span-3">
-              <Label>Kategori Bazlı Harcama</Label>
-              {pie.length === 0 ? <div className="py-12 text-center text-sm text-zinc-500">Bu ay gider yok.</div> : (
-                <div className="mt-3 flex flex-col items-center gap-4 sm:flex-row">
-                  <div className={`h-44 w-44 shrink-0 ${blur}`}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart><Pie isAnimationActive={false} data={pie} dataKey="value" innerRadius={52} outerRadius={80} paddingAngle={3} stroke="none">{pie.map((p) => <Cell key={p.name} fill={CAT_COLOR[p.name] || "#94a3b8"} />)}</Pie><Tooltip content={<ChartTip />} /></PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <ul className="w-full space-y-2 text-sm">
-                    {pie.map((p) => (
-                      <li key={p.name} className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-zinc-300"><span className="h-2.5 w-2.5 rounded-full" style={{ background: CAT_COLOR[p.name] }} />{p.name}</span>
-                        <span className="text-zinc-400"><Money v={p.value} /> <span className="text-zinc-600">· %{Math.round((p.value / exp) * 100)}</span></span></li>))}
-                  </ul>
-                </div>)}
-            </Card>
-            <Card className="lg:col-span-3">
-              <Label>Son 6 Ay · Gelir vs Gider</Label>
-              <div className={`mt-3 h-48 ${blur}`}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={six} barGap={4}><CartesianGrid vertical={false} stroke="rgba(255,255,255,0.06)" />
-                    <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#71717a", fontSize: 12 }} />
-                    <YAxis tickLine={false} axisLine={false} width={40} tick={{ fill: "#71717a", fontSize: 11 }} tickFormatter={(v) => (v >= 1000 ? `${Math.round(v / 1000)}k` : v)} />
-                    <Tooltip content={<ChartTip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
-                    <Bar isAnimationActive={false} dataKey="Gelir" fill="#34d399" radius={[6, 6, 0, 0]} /><Bar isAnimationActive={false} dataKey="Gider" fill="#fb7185" radius={[6, 6, 0, 0]} /></BarChart>
-                </ResponsiveContainer>
-              </div>
-            </Card>
-
-            <Card className="lg:col-span-3">
-              <Label icon={Layers}>Gelecek Ayların Taksit Yükü</Label>
-              <div className="mt-2 flex items-end justify-between"><div><div className="text-xs text-zinc-500">Devreden toplam taksit borcu</div>
-                <div className="text-3xl font-semibold tracking-tight text-violet-300"><Money v={totalDebt} /></div></div>
-                <div className="text-right text-xs text-zinc-500">{activeInst.length} aktif taksit</div></div>
-              <div className={`mt-3 h-28 ${blur}`}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={future}><XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fill: "#71717a", fontSize: 11 }} />
-                    <Tooltip content={<ChartTip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} /><Bar isAnimationActive={false} dataKey="Taksit" fill="#a78bfa" radius={[6, 6, 0, 0]} /></BarChart>
-                </ResponsiveContainer>
-              </div>
-              <ul className="mt-2 space-y-1.5 text-sm">
-                {activeInst.length === 0 && <li className="text-zinc-500">Aktif taksit yok.</li>}
-                {activeInst.map((x) => (
-                  <li key={x.t.id} className="flex items-center justify-between"><span className="text-zinc-300">{x.t.title} <span className="text-xs text-zinc-600">· {x.left} taksit kaldı</span></span>
-                    <span className="text-zinc-400"><Money v={x.per} d2 />/ay</span></li>))}
-              </ul>
-            </Card>
-            <Card className="lg:col-span-3">
-              <Label icon={Repeat} tone="text-amber-400/80">Sabit Ödemeler</Label>
-              <div className="mt-2 text-3xl font-semibold tracking-tight text-amber-400"><Money v={fixedTotal} /></div>
-              <div className="text-xs text-zinc-500">{inc > 0 ? <>Gelirin <span className={blur}>%{Math.round((fixedTotal / inc) * 100)}</span>'i her ay sabit olarak çıkıyor</> : "Her ay otomatik tekrarlayan giderler"}</div>
-              <ul className="mt-3 space-y-1.5 text-sm">
-                {fixed.length === 0 && <li className="text-zinc-500">Bu ay sabit ödeme yok.</li>}
-                {fixed.sort((a, b) => b.amt - a.amt).map((o) => (
-                  <li key={o.tx.id} className="flex items-center justify-between"><span className="text-zinc-300">{o.tx.title}</span><span className="text-amber-300/90"><Money v={o.amt} d2 /></span></li>))}
-              </ul>
-            </Card>
-          </div>
-
-          {/* İşlemler */}
-          <Card className="!p-0 overflow-hidden">
-            <div className="flex flex-col gap-2 border-b border-white/10 p-4 sm:flex-row sm:items-center">
-              <div className="relative flex-1"><Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
-                <input className={`${inputCls} pl-9`} placeholder="İşlem ara…" value={q} onChange={(e) => setQ(e.target.value)} /></div>
-              <select className={`${inputCls} sm:w-44`} value={fCat} onChange={(e) => setFCat(e.target.value)}><option>Tümü</option>{[...EXP_CATS, ...INC_CATS].map((c) => <option key={c}>{c}</option>)}</select>
-              <select className={`${inputCls} sm:w-40`} value={fMethod} onChange={(e) => setFMethod(e.target.value)}><option>Tümü</option>{METHODS.map((c) => <option key={c}>{c}</option>)}</select>
-              <button onClick={() => setAllMonths(!allMonths)} className={`whitespace-nowrap rounded-xl border px-3 py-2 text-sm ${allMonths ? "border-white/30 bg-white/10 text-white" : "border-white/10 text-zinc-400"}`}>{allMonths ? "Tüm aylar" : "Seçili ay"}</button>
-            </div>
-            <div className="max-h-[560px] overflow-auto">
-              {grouped.length === 0 && <div className="py-14 text-center text-sm text-zinc-500">Eşleşen işlem yok.</div>}
-              {grouped.map((g) => (
-                <div key={g.k}>
-                  <div className="sticky top-0 bg-zinc-900/90 px-4 py-1.5 text-xs font-medium text-zinc-500 backdrop-blur">{dayFmt(g.k)}</div>
-                  {g.items.map((r, i) => {
-                    const t = r.tx, isInc = t.type === "income";
-                    return (
-                      <div key={t.id + i} className="group flex items-center gap-3 border-t border-white/5 px-4 py-3 hover:bg-white/[0.03]">
-                        <span className="h-9 w-9 shrink-0 rounded-xl" style={{ background: isInc ? "rgba(52,211,153,.15)" : (CAT_COLOR[t.category] || "#94a3b8") + "26", display: "grid", placeItems: "center" }}>
-                          {isInc ? <TrendingUp size={16} className="text-emerald-400" /> : t.mode === "installment" ? <Layers size={16} className="text-violet-300" /> : t.mode === "recurring" ? <Repeat size={16} className="text-amber-400" /> : t.method === "Kredi Kartı" ? <CreditCard size={16} style={{ color: CAT_COLOR[t.category] }} /> : <Wallet size={16} style={{ color: CAT_COLOR[t.category] }} />}</span>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2"><span className="truncate text-sm font-medium">{t.title}</span>
-                            {t.mode === "installment" && <span className="shrink-0 rounded-md bg-violet-400/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-300">{r.all ? `${t.installments} taksit` : `${r.k}/${r.n}`}</span>}
-                            {t.mode === "recurring" && <span className="shrink-0 rounded-md bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">Her ay</span>}</div>
-                          <div className="truncate text-xs text-zinc-500">{t.category} · {t.method}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className={`text-sm font-semibold ${isInc ? "text-emerald-400" : "text-rose-400"}`}>{isInc ? "+" : "−"}<Money v={r.amt} d2 /></div>
-                          {t.mode === "installment" && r.all && <div className="text-[11px] text-zinc-600">toplam</div>}
-                        </div>
-                        <button onClick={() => del(t)} className="rounded-lg p-1.5 text-zinc-600 transition hover:bg-rose-400/10 hover:text-rose-400 sm:opacity-0 sm:group-hover:opacity-100" title="Sil"><Trash2 size={15} /></button>
-                      </div>);
-                  })}
-                </div>))}
-            </div>
-          </Card>
-          <div className="flex items-center justify-between px-1 text-xs text-zinc-600">
-            <span>Veriler yalnızca bu cihazın tarayıcısında saklanır. Düzenli yedek alın.</span>
-            <button onClick={clearAll} className="hover:text-rose-400">Tüm verileri sil</button>
-          </div>
+        <main className="relative mx-auto max-w-6xl px-4 pt-5" style={{ paddingBottom: "calc(110px + env(safe-area-inset-bottom))" }}>
+          {content()}
+          <div className="mt-6 px-1 text-xs text-zinc-600">Veriler yalnızca bu cihazın tarayıcısında saklanır. Düzenli yedek alın.</div>
         </main>
-        {modal && <AddModal onClose={() => setModal(false)} onSave={(tx) => { setTxs((p) => [...p, tx]); setYm(tx.date.slice(0, 7)); setModal(false); }} />}
+
+        {/* Mobil: yüzen + butonu ve alt sekme çubuğu */}
+        <button onClick={() => setModal("new")} aria-label="İşlem ekle" className="fixed right-4 z-40 grid h-14 w-14 place-items-center rounded-full bg-white text-zinc-900 shadow-xl shadow-black/50 active:scale-95 sm:hidden" style={{ bottom: "calc(78px + env(safe-area-inset-bottom))" }}><Plus size={26} /></button>
+        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-zinc-950/90 backdrop-blur-xl md:hidden" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+          <div className="mx-auto grid max-w-md grid-cols-6">
+            {TABS.slice(0, 6).map(([k, l, I]) => (
+              <button key={k} onClick={() => setTab(k)} className={`flex flex-col items-center gap-1 py-2.5 text-[10px] font-medium transition active:scale-95 ${tab === k ? "text-white" : "text-zinc-500"}`}>
+                <span className={`grid h-7 w-11 place-items-center rounded-full transition ${tab === k ? "bg-white/10" : ""}`}><I size={19} /></span>{l}</button>))}
+          </div>
+        </nav>
+        {modal && <AddModal key={modal === "new" ? "new" : modal.id} initial={modal === "new" ? null : modal} onClose={() => setModal(null)} onSave={save} onDelete={() => del(modal)} />}
       </div>
     </PrivCtx.Provider>
   );
