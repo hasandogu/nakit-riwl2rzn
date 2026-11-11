@@ -52,6 +52,7 @@ const MODES = { single: "Tek Çekim", installment: "Taksitli", recurring: "Her A
 
 /* ───────────── Yardımcılar ───────────── */
 const PrivCtx = createContext(false);
+const CardsCtx = createContext([]);
 const pad = (n) => String(n).padStart(2, "0");
 const fmt = (n) => new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 }).format(n || 0);
 const fmt2 = (n) => new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 }).format(n || 0);
@@ -61,6 +62,14 @@ const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${pad(
 const monthLabel = (ym) => new Date(+ym.slice(0, 4), +ym.slice(5) - 1, 1).toLocaleDateString("tr-TR", { month: "long", year: "numeric" });
 const monthShort = (ym) => new Date(+ym.slice(0, 4), +ym.slice(5) - 1, 1).toLocaleDateString("tr-TR", { month: "short" });
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const tarihTR = (t) => (t ? t.split("-").reverse().join(".") : "");
+const addDay = (d) => { const x = new Date(d + "T00:00:00"); x.setDate(x.getDate() + 1); return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`; };
+const daysBetween = (a, b) => Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 864e5);
+const gunText = (n) => (n < 0 ? `${-n} gün gecikti` : n === 0 ? "bugün" : `${n} gün kaldı`);
+const SEED_CARDS = [
+  { id: "c1", name: "Garanti Bonus", cutDay: 15, dueDay: 25, limit: 120000 },
+  { id: "c2", name: "Yapı Kredi World", cutDay: 5, dueDay: 15, limit: 40000 },
+];
 const dayIn = (ym, day) => `${ym}-${pad(Math.min(day, new Date(+ym.slice(0, 4), +ym.slice(5), 0).getDate()))}`;
 
 /** Bir işlemin seçilen aydaki gerçekleşmelerini döndürür (taksit / tekrar motoru). */
@@ -99,11 +108,12 @@ function buildSeed() {
     add({ type: "expense", title: ["Sinema", "Konser bileti", "Arkadaşlarla akşam"][between(0, 2)], amount: between(250, 900), category: "Eğlence", method: "Kredi Kartı", date: dayIn(ym, between(20, 27)) });
     if (m === -3) add({ type: "expense", title: "Online kurs", amount: 1850, category: "Eğitim / Donanım", method: "Kredi Kartı", date: dayIn(ym, 11) });
   }
+  out.forEach((t) => { if (t.method === "Kredi Kartı") t.cardId = t.category === "Dijital Abonelikler" || t.title === "İnternet" ? "c2" : "c1"; });
   return out;
 }
 function loadStore() {
-  try { const r = JSON.parse(localStorage.getItem(KEY)); if (r && Array.isArray(r.txs)) return r; } catch (e) {}
-  return { txs: buildSeed(), budget: 32000, priv: false, catBudgets: {} };
+  try { const r = JSON.parse(localStorage.getItem(KEY)); if (r && Array.isArray(r.txs)) return { cards: [], paid: {}, catBudgets: {}, ...r }; } catch (e) {}
+  return { txs: buildSeed(), budget: 32000, priv: false, catBudgets: {}, cards: SEED_CARDS, paid: {} };
 }
 
 /* ───────────── Küçük bileşenler ───────────── */
@@ -132,15 +142,15 @@ const ChartTip = ({ active, payload, label }) => {
 };
 
 /* ───────────── İşlem ekleme penceresi ───────────── */
-function AddModal({ onClose, onSave, onDelete, initial }) {
-  const [f, setF] = useState(initial ? { ...initial, amount: String(initial.amount) } : { type: "expense", title: "", amount: "", category: EXP_CATS[0], method: METHODS[1], date: todayStr(), mode: "single", installments: 3 });
+function AddModal({ onClose, onSave, onDelete, initial, cards }) {
+  const [f, setF] = useState(initial ? { cardId: "", ...initial, amount: String(initial.amount) } : { cardId: cards[0]?.id || "", type: "expense", title: "", amount: "", category: EXP_CATS[0], method: METHODS[1], date: todayStr(), mode: "single", installments: 3 });
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const setType = (t) => setF((p) => ({ ...p, type: t, category: t === "income" ? INC_CATS[0] : EXP_CATS[0], mode: t === "income" && p.mode === "installment" ? "single" : p.mode }));
   const valid = f.title.trim() && +f.amount > 0 && f.date;
   useEffect(() => { const h = (e) => e.key === "Escape" && onClose(); window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [onClose]);
   const submit = (e) => {
     e.preventDefault(); if (!valid) return;
-    onSave({ id: initial?.id || uid(), type: f.type, title: f.title.trim(), amount: +f.amount, category: f.category, method: f.method, date: f.date, mode: f.mode, installments: f.mode === "installment" ? +f.installments : 1 });
+    onSave({ id: initial?.id || uid(), type: f.type, title: f.title.trim(), amount: +f.amount, category: f.category, method: f.method, date: f.date, mode: f.mode, installments: f.mode === "installment" ? +f.installments : 1, cardId: f.method === "Kredi Kartı" && f.cardId ? f.cardId : undefined });
   };
   const per = f.mode === "installment" && +f.amount > 0 ? +f.amount / +f.installments : 0;
   return (
@@ -162,6 +172,9 @@ function AddModal({ onClose, onSave, onDelete, initial }) {
             <select className={inputCls} value={f.category} onChange={(e) => set("category", e.target.value)}>{(f.type === "income" ? INC_CATS : EXP_CATS).map((c) => <option key={c}>{c}</option>)}</select>
             <select className={inputCls} value={f.method} onChange={(e) => set("method", e.target.value)}>{METHODS.map((c) => <option key={c}>{c}</option>)}</select>
           </div>
+          {f.method === "Kredi Kartı" && (cards.length > 0
+            ? <select className={inputCls} value={f.cardId} onChange={(e) => set("cardId", e.target.value)}>{cards.map((c) => <option key={c.id} value={c.id}>{c.name} (ekstre {c.cutDay}., son ödeme {c.dueDay}.)</option>)}</select>
+            : <div className="text-xs text-zinc-500">Hangi karta ait olduğunu seçmek için önce Kart sekmesinden kart ekleyin.</div>)}
           <div>
             <div className="mb-1.5 text-xs text-zinc-500">Ödeme şekli</div>
             <div className={`grid gap-1 rounded-xl bg-zinc-900 p-1 ${f.type === "income" ? "grid-cols-2" : "grid-cols-3"}`}>
@@ -189,15 +202,45 @@ function AddModal({ onClose, onSave, onDelete, initial }) {
   );
 }
 
+function CardModal({ initial, onClose, onSave, onDelete }) {
+  const [f, setF] = useState(initial ? { ...initial, limit: String(initial.limit || "") } : { name: "", cutDay: 15, dueDay: 25, limit: "" });
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const day = (v) => Math.min(31, Math.max(1, Math.round(+v) || 1));
+  const valid = f.name.trim();
+  useEffect(() => { const h = (e) => e.key === "Escape" && onClose(); window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h); }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <form onSubmit={(e) => { e.preventDefault(); if (valid) onSave({ id: initial?.id || uid(), name: f.name.trim(), cutDay: day(f.cutDay), dueDay: day(f.dueDay), limit: Math.max(0, +f.limit || 0) }); }}
+        onClick={(e) => e.stopPropagation()} className="w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl border border-white/10 bg-zinc-950 p-5 shadow-2xl" style={{ paddingBottom: "calc(20px + env(safe-area-inset-bottom))" }}>
+        <div className="mb-4 flex items-center justify-between"><h2 className="text-lg font-semibold">{initial ? "Kartı Düzenle" : "Yeni Kart"}</h2>
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-zinc-400 hover:bg-white/10"><X size={18} /></button></div>
+        <div className="space-y-3">
+          <input autoFocus className={inputCls} placeholder="Kart adı (örn. Garanti Bonus)" value={f.name} onChange={(e) => set("name", e.target.value)} />
+          <div className="grid grid-cols-2 gap-3">
+            <div><div className="mb-1 text-xs text-zinc-500">Ekstre kesim günü</div><input className={inputCls} type="number" inputMode="numeric" min="1" max="31" value={f.cutDay} onChange={(e) => set("cutDay", e.target.value)} /></div>
+            <div><div className="mb-1 text-xs text-zinc-500">Son ödeme günü</div><input className={inputCls} type="number" inputMode="numeric" min="1" max="31" value={f.dueDay} onChange={(e) => set("dueDay", e.target.value)} /></div>
+          </div>
+          <div><div className="mb-1 text-xs text-zinc-500">Kart limiti ₺ (isteğe bağlı)</div><input className={inputCls} type="number" inputMode="decimal" value={f.limit} onChange={(e) => set("limit", e.target.value)} /></div>
+          <div className="text-xs text-zinc-500">Ekstre kesim günü, bankanın ekstreyi oluşturduğu gündür. O günden sonraki harcamalar bir sonraki ekstreye girer.</div>
+        </div>
+        <button disabled={!valid} className="mt-5 w-full rounded-xl bg-white py-2.5 text-sm font-semibold text-zinc-900 disabled:opacity-30">Kaydet</button>
+        {initial && <button type="button" onClick={onDelete} className="mt-2 w-full rounded-xl border border-rose-400/30 py-2.5 text-sm font-medium text-rose-300 hover:bg-rose-400/10">Kartı Sil</button>}
+      </form>
+    </div>
+  );
+}
+
 /* ───────────── Ana uygulama ───────────── */
 const TABS = [
-  ["ozet", "Özet", LayoutDashboard], ["islemler", "İşlemler", Receipt], ["taksit", "Taksit", Layers],
+  ["ozet", "Özet", LayoutDashboard], ["islemler", "İşlemler", Receipt], ["taksit", "Taksit", Layers], ["kart", "Kart", CreditCard],
   ["sabit", "Sabit", Repeat], ["analiz", "Analiz", BarChart3], ["butce", "Bütçe", Target], ["ayar", "Ayarlar", Settings],
 ];
 const hashTab = () => { const h = (window.location.hash || "").replace("#/", ""); return TABS.some((t) => t[0] === h) ? h : "ozet"; };
 
 const TxRow = ({ r, onOpen, onDel }) => {
   const t = r.tx, isInc = t.type === "income";
+  const cards = useContext(CardsCtx);
+  const cardName = cards.find((c) => c.id === t.cardId)?.name;
   return (
     <div onClick={() => onOpen(t)} className="group flex cursor-pointer items-center gap-3 border-t border-white/5 px-4 py-3 transition hover:bg-white/[0.04] active:bg-white/[0.07]">
       <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl" style={{ background: isInc ? "rgba(52,211,153,.15)" : (CAT_COLOR[t.category] || "#94a3b8") + "26" }}>
@@ -206,7 +249,7 @@ const TxRow = ({ r, onOpen, onDel }) => {
         <div className="flex items-center gap-2"><span className="truncate text-sm font-medium">{t.title}</span>
           {t.mode === "installment" && <span className="shrink-0 rounded-md bg-violet-400/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-300">{r.all ? `${t.installments} taksit` : `${r.k}/${r.n}`}</span>}
           {t.mode === "recurring" && <span className="shrink-0 rounded-md bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">Her ay</span>}</div>
-        <div className="truncate text-xs text-zinc-500">{t.category} · {t.method}</div>
+        <div className="truncate text-xs text-zinc-500">{t.category} · {t.method}{cardName ? ` · ${cardName}` : ""}</div>
       </div>
       <div className="text-right">
         <div className={`text-sm font-semibold ${isInc ? "text-emerald-400" : "text-rose-400"}`}>{isInc ? "+" : "−"}<Money v={r.amt} d2 /></div>
@@ -222,6 +265,9 @@ function App() {
   const [txs, setTxs] = useState(init.txs);
   const [budget, setBudget] = useState(init.budget ?? 32000);
   const [catBudgets, setCatBudgets] = useState(init.catBudgets || {});
+  const [cards, setCards] = useState(init.cards || []);
+  const [paid, setPaid] = useState(init.paid || {});
+  const [cardModal, setCardModal] = useState(null);
   const [priv, setPriv] = useState(!!init.priv);
   const [ym, setYm] = useState(todayStr().slice(0, 7));
   const [tab, setTabRaw] = useState(hashTab);
@@ -235,7 +281,7 @@ function App() {
 
   const setTab = (t) => { setTabRaw(t); try { window.history.replaceState(null, "", "#/" + t); } catch (e) {} window.scrollTo(0, 0); };
   const goTo = (t, o = {}) => { if (o.cat !== undefined) { setFCat(o.cat); setAllMonths(false); setQ(""); setFMethod("Tümü"); } setTab(t); };
-  useEffect(() => { localStorage.setItem(KEY, JSON.stringify({ txs, budget, priv, catBudgets })); }, [txs, budget, priv, catBudgets]);
+  useEffect(() => { localStorage.setItem(KEY, JSON.stringify({ txs, budget, priv, catBudgets, cards, paid })); }, [txs, budget, priv, catBudgets, cards, paid]);
   useEffect(() => { const h = () => setTabRaw(hashTab()); window.addEventListener("hashchange", h); return () => window.removeEventListener("hashchange", h); }, []);
 
   /* hesaplamalar */
@@ -293,7 +339,7 @@ function App() {
   const save = (tx) => { setTxs((p) => (p.some((x) => x.id === tx.id) ? p.map((x) => (x.id === tx.id ? tx : x)) : [...p, tx])); setYm(tx.date.slice(0, 7)); setModal(null); };
   const exportJson = () => {
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([JSON.stringify({ txs, budget, catBudgets }, null, 2)], { type: "application/json" }));
+    a.href = URL.createObjectURL(new Blob([JSON.stringify({ txs, budget, catBudgets, cards, paid }, null, 2)], { type: "application/json" }));
     a.download = `nakit-akisi-yedek-${todayStr()}.json`; a.click();
   };
   const importJson = (e) => {
@@ -303,13 +349,33 @@ function App() {
       try {
         const d = JSON.parse(r.result);
         if (!Array.isArray(d.txs) || !d.txs.every((t) => t.id && t.date && t.amount >= 0 && t.mode)) throw new Error();
-        if (window.confirm("Mevcut veriler silinip yedekteki veriler yüklenecek. Emin misiniz?")) { setTxs(d.txs); if (d.budget) setBudget(+d.budget); setCatBudgets(d.catBudgets || {}); }
+        if (window.confirm("Mevcut veriler silinip yedekteki veriler yüklenecek. Emin misiniz?")) { setTxs(d.txs); if (d.budget) setBudget(+d.budget); setCatBudgets(d.catBudgets || {}); setCards(d.cards || []); setPaid(d.paid || {}); }
       } catch { window.alert("Geçersiz yedek dosyası."); }
     };
     r.readAsText(file); e.target.value = "";
   };
-  const clearAll = () => { if (window.confirm("TÜM veriler (örnek veriler dahil) silinecek. Önce yedek almanızı öneririz. Devam edilsin mi?")) setTxs([]); };
-  const loadSample = () => { if (window.confirm("Mevcut veriler silinip örnek veriler yüklenecek. Emin misiniz?")) setTxs(buildSeed()); };
+  const clearAll = () => { if (window.confirm("TÜM veriler (örnek veriler dahil) silinecek. Önce yedek almanızı öneririz. Devam edilsin mi?")) { setTxs([]); setCards([]); setPaid({}); } };
+  const loadSample = () => { if (window.confirm("Mevcut veriler silinip örnek veriler yüklenecek. Emin misiniz?")) { setTxs(buildSeed()); setCards(SEED_CARDS); setPaid({}); } };
+
+  const cardStats = (card) => {
+    const today = todayStr(), cur = today.slice(0, 7);
+    const mCur = today <= dayIn(cur, card.cutDay) ? cur : addM(cur, 1);
+    const cardTxs = txs.filter((t) => t.type === "expense" && t.cardId === card.id);
+    const stmt = (m) => {
+      const end = dayIn(m, card.cutDay), prevEnd = dayIn(addM(m, -1), card.cutDay), start = addDay(prevEnd);
+      const due = card.dueDay > card.cutDay ? dayIn(m, card.dueDay) : dayIn(addM(m, 1), card.dueDay);
+      const items = [addM(m, -1), m].flatMap((mm) => monthOcc(cardTxs, mm).map((o) => ({ ...o, date: dayIn(mm, +o.tx.date.slice(8)) }))).filter((o) => o.date >= start && o.date <= end).sort((a, b) => b.date.localeCompare(a.date));
+      return { m, end, start, due, items, total: sumBy(items, (o) => o.amt), key: card.id + ":" + m };
+    };
+    const curS = stmt(mCur), prevS = stmt(addM(mCur, -1));
+    const isPaid = !!paid[prevS.key];
+    const instTxs = cardTxs.filter((t) => t.mode === "installment");
+    const future = sumBy(Array.from({ length: 24 }, (_, i) => addM(mCur, i + 1)).flatMap((mm) => monthOcc(instTxs, mm)), (o) => o.amt);
+    const used = (isPaid ? 0 : prevS.total) + curS.total + future;
+    return { card, curS, prevS, isPaid, future, used, daysToCut: daysBetween(today, curS.end), daysToDue: daysBetween(today, prevS.due) };
+  };
+  const cardSt = cards.map(cardStats);
+  const dueTone = (n) => (n <= 3 ? "text-rose-400" : n <= 7 ? "text-amber-400" : "text-zinc-400");
 
   /* ───── Sekme içerikleri ───── */
   const Ozet = () => (
@@ -332,6 +398,19 @@ function App() {
         <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10"><div className={`h-full rounded-full transition-all ${usedPct >= 100 ? "bg-rose-400" : usedPct >= 80 ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${usedPct}%` }} /></div>
         <div className="mt-2 flex justify-between text-xs text-zinc-500"><span>Harcanan <Money v={exp} /></span><span>Aylık bütçe <Money v={budget} /></span></div>
       </Card>
+      {cards.length > 0 && (
+        <Card className="lg:col-span-6" onClick={() => setTab("kart")}>
+          <div className="flex items-center justify-between"><Label icon={CreditCard}>Kart Ödemeleri</Label><Go /></div>
+          <ul className="mt-3 divide-y divide-white/5">
+            {[...cardSt].sort((a, b) => a.prevS.due.localeCompare(b.prevS.due)).map((s) => (
+              <li key={s.card.id} className="flex items-center justify-between py-2.5 text-sm">
+                <span className="shrink-0"><span className="block text-zinc-200">{s.card.name}</span><span className="block text-xs text-zinc-500">ekstre {tarihTR(s.prevS.end)}</span></span>
+                {s.prevS.total === 0 ? <span className="text-xs text-zinc-500">ödenecek ekstre yok</span>
+                  : s.isPaid ? <span className="text-xs text-emerald-400">ödendi ✓</span>
+                  : <span className="text-right"><Money v={s.prevS.total} className="block font-medium" /><span className={`block text-xs ${dueTone(s.daysToDue)}`}>son ödeme {tarihTR(s.prevS.due)} · {gunText(s.daysToDue)}</span></span>}
+              </li>))}
+          </ul>
+        </Card>)}
       <Card className="lg:col-span-3" onClick={() => setTab("analiz")}>
         <div className="flex items-center justify-between"><Label>Kategori Bazlı Harcama</Label><Go /></div>
         {pie.length === 0 ? <div className="py-12 text-center text-sm text-zinc-500">Bu ay gider yok.</div> : (
@@ -505,10 +584,52 @@ function App() {
     </div>
   );
 
-  const content = { ozet: Ozet, islemler: Islemler, taksit: Taksit, sabit: Sabit, analiz: Analiz, butce: Butce, ayar: Ayar }[tab];
+  const Kart = () => {
+    const totalDue = sumBy(cardSt.filter((s) => !s.isPaid), (s) => s.prevS.total);
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <Card><Label icon={CreditCard}>Ödenecek Ekstre</Label><div className="mt-2 text-3xl font-semibold text-rose-300"><Money v={totalDue} /></div><div className="mt-1 text-xs text-zinc-500">kesilmiş, ödenmemiş</div></Card>
+          <Card><Label>Toplam Kart Borcu</Label><div className="mt-2 text-3xl font-semibold"><Money v={sumBy(cardSt, (s) => s.used)} /></div><div className="mt-1 text-xs text-zinc-500">ekstre + dönem + taksit</div></Card>
+        </div>
+        {cardSt.length === 0 && <Card><div className="py-6 text-center text-sm text-zinc-500">Henüz kart yok. Ekstre kesim ve son ödeme günlerini girerek başlayın.</div></Card>}
+        {cardSt.map((s) => { const lim = +s.card.limit || 0, pct = lim > 0 ? Math.min(100, (s.used / lim) * 100) : 0; return (
+          <Card key={s.card.id}>
+            <div className="flex items-start justify-between">
+              <div><div className="flex items-center gap-2 font-medium"><CreditCard size={16} className="text-zinc-400" />{s.card.name}</div>
+                <div className="mt-1 text-xs text-zinc-500">Ekstre kesim: her ayın {s.card.cutDay}. günü · Son ödeme: {s.card.dueDay}. günü</div></div>
+              <button onClick={() => setCardModal(s.card)} className="rounded-lg p-2 text-zinc-400 hover:bg-white/10 hover:text-white" aria-label="Kartı düzenle"><Pencil size={15} /></button>
+            </div>
+            {lim > 0 && (<div className="mt-4"><div className="h-2 overflow-hidden rounded-full bg-white/10"><div className={`h-full rounded-full ${pct >= 90 ? "bg-rose-400" : pct >= 70 ? "bg-amber-400" : "bg-emerald-400"}`} style={{ width: `${pct}%` }} /></div>
+              <div className="mt-1.5 flex justify-between text-xs text-zinc-500"><span>Kullanılan <Money v={s.used} /></span><span>Kullanılabilir <Money v={Math.max(0, lim - s.used)} /> / <Money v={lim} /></span></div></div>)}
+            <div className="mt-4 rounded-xl bg-white/[0.03] p-3">
+              <div className="text-xs text-zinc-500">Ödenecek ekstre · {tarihTR(s.prevS.start)} – {tarihTR(s.prevS.end)}</div>
+              {s.prevS.total === 0 ? <div className="mt-1 text-sm text-zinc-500">Ödenecek ekstre yok.</div> : (
+                <div className="mt-1 flex items-end justify-between gap-3">
+                  <div><div className={`text-2xl font-semibold ${s.isPaid ? "text-zinc-500 line-through" : "text-rose-300"}`}><Money v={s.prevS.total} /></div>
+                    <div className={`text-xs ${s.isPaid ? "text-emerald-400" : dueTone(s.daysToDue)}`}>{s.isPaid ? "Ödendi ✓" : `Son ödeme ${tarihTR(s.prevS.due)} · ${gunText(s.daysToDue)}`}</div></div>
+                  <button onClick={() => setPaid((p) => ({ ...p, [s.prevS.key]: !p[s.prevS.key] }))} className={`rounded-lg px-3 py-2 text-xs font-semibold ${s.isPaid ? "border border-white/15 text-zinc-300" : "bg-white text-zinc-900"}`}>{s.isPaid ? "Geri al" : "Ödendi"}</button>
+                </div>)}
+            </div>
+            <div className="mt-3 rounded-xl bg-white/[0.03] p-3">
+              <div className="text-xs text-zinc-500">Güncel dönem · {tarihTR(s.curS.start)} – {tarihTR(s.curS.end)}</div>
+              <div className="mt-1 flex items-end justify-between"><div className="text-2xl font-semibold"><Money v={s.curS.total} /></div>
+                <div className="text-right text-xs text-zinc-500">Ekstre {tarihTR(s.curS.end)}<br />{gunText(s.daysToCut)}</div></div>
+              {s.future > 0 && <div className="mt-2 text-xs text-violet-300">Sonraki dönemlere kalan taksit: <Money v={s.future} /></div>}
+            </div>
+            {s.curS.items.length > 0 && (<div className="-mx-5 mt-3 border-b border-white/5">{s.curS.items.slice(0, 5).map((o, i) => <TxRow key={o.tx.id + i} r={o} onOpen={setModal} onDel={del} />)}
+              {s.curS.items.length > 5 && <div className="border-t border-white/5 px-5 py-2 text-xs text-zinc-500">+{s.curS.items.length - 5} işlem daha…</div>}</div>)}
+          </Card>); })}
+        <button onClick={() => setCardModal("new")} className="w-full rounded-2xl border border-dashed border-white/15 py-4 text-sm text-zinc-300 transition hover:bg-white/5">+ Kart ekle</button>
+      </div>
+    );
+  };
+
+  const content = { ozet: Ozet, islemler: Islemler, taksit: Taksit, kart: Kart, sabit: Sabit, analiz: Analiz, butce: Butce, ayar: Ayar }[tab];
 
   return (
     <PrivCtx.Provider value={priv}>
+      <CardsCtx.Provider value={cards}>
       <div className="min-h-screen bg-zinc-950 text-zinc-100 antialiased" style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', Inter, system-ui, sans-serif" }}>
         <div className="pointer-events-none fixed inset-x-0 top-0 h-72 bg-gradient-to-b from-emerald-500/10 via-transparent to-transparent" />
         <header className="sticky top-0 z-30 border-b border-white/10 bg-zinc-950/80 backdrop-blur-xl" style={{ paddingTop: "env(safe-area-inset-top)" }}>
@@ -532,7 +653,7 @@ function App() {
           </div>
           {/* Masaüstü sekmeleri */}
           <div className="mx-auto hidden max-w-6xl gap-1 px-4 pb-2 md:flex">
-            {TABS.slice(0, 6).map(([k, l, I]) => (<button key={k} onClick={() => setTab(k)} className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition ${tab === k ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-200"}`}><I size={15} />{l}</button>))}
+            {TABS.filter((t) => t[0] !== "ayar").map(([k, l, I]) => (<button key={k} onClick={() => setTab(k)} className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition ${tab === k ? "bg-white/10 text-white" : "text-zinc-500 hover:text-zinc-200"}`}><I size={15} />{l}</button>))}
           </div>
         </header>
 
@@ -544,14 +665,18 @@ function App() {
         {/* Mobil: yüzen + butonu ve alt sekme çubuğu */}
         <button onClick={() => setModal("new")} aria-label="İşlem ekle" className="fixed right-4 z-40 grid h-14 w-14 place-items-center rounded-full bg-white text-zinc-900 shadow-xl shadow-black/50 active:scale-95 sm:hidden" style={{ bottom: "calc(78px + env(safe-area-inset-bottom))" }}><Plus size={26} /></button>
         <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-zinc-950/90 backdrop-blur-xl md:hidden" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-          <div className="mx-auto grid max-w-md grid-cols-6">
-            {TABS.slice(0, 6).map(([k, l, I]) => (
+          <div className="mx-auto grid max-w-md grid-cols-7">
+            {TABS.filter((t) => t[0] !== "ayar").map(([k, l, I]) => (
               <button key={k} onClick={() => setTab(k)} className={`flex flex-col items-center gap-1 py-2.5 text-[10px] font-medium transition active:scale-95 ${tab === k ? "text-white" : "text-zinc-500"}`}>
                 <span className={`grid h-7 w-11 place-items-center rounded-full transition ${tab === k ? "bg-white/10" : ""}`}><I size={19} /></span>{l}</button>))}
           </div>
         </nav>
-        {modal && <AddModal key={modal === "new" ? "new" : modal.id} initial={modal === "new" ? null : modal} onClose={() => setModal(null)} onSave={save} onDelete={() => del(modal)} />}
+        {modal && <AddModal key={modal === "new" ? "new" : modal.id} initial={modal === "new" ? null : modal} onClose={() => setModal(null)} onSave={save} onDelete={() => del(modal)} cards={cards} />}
+        {cardModal && <CardModal key={cardModal === "new" ? "new" : cardModal.id} initial={cardModal === "new" ? null : cardModal} onClose={() => setCardModal(null)}
+          onSave={(c) => { setCards((p) => (p.some((x) => x.id === c.id) ? p.map((x) => (x.id === c.id ? c : x)) : [...p, c])); setCardModal(null); }}
+          onDelete={() => { if (window.confirm(`"${cardModal.name}" silinsin mi? Bu karta bağlı işlemler silinmez, yalnızca karttan ayrılır.`)) { setCards((p) => p.filter((x) => x.id !== cardModal.id)); setTxs((p) => p.map((t) => (t.cardId === cardModal.id ? { ...t, cardId: undefined } : t))); setCardModal(null); } }} />}
       </div>
+      </CardsCtx.Provider>
     </PrivCtx.Provider>
   );
 }
